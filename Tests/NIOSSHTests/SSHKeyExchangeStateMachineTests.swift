@@ -693,6 +693,25 @@ final class SSHKeyExchangeStateMachineTests: XCTestCase {
         }
     }
 
+    func testMACAlgorithmListIsDeduplicated() throws {
+        // Two schemes that share a MAC name must produce only one MAC entry in KEXINIT.
+        let client = SSHKeyExchangeStateMachine(
+            allocator: ByteBufferAllocator(),
+            loop: EmbeddedEventLoop(),
+            role: .client(
+                .init(userAuthDelegate: ExplodingAuthDelegate(), serverAuthDelegate: AcceptAllHostKeysDelegate())
+            ),
+            remoteVersion: Constants.version,
+            protectionSchemes: [SharedMACTransportProtection.self, OtherSharedMACTransportProtection.self],
+            previousSessionIdentifier: nil
+        )
+
+        let message = client.createKeyExchangeMessage()
+        XCTAssertEqual(message.encryptionAlgorithmsClientToServer, ["stub-cipher-a", "stub-cipher-b"])
+        XCTAssertEqual(message.macAlgorithmsClientToServer, ["hmac-sha2-256"])
+        XCTAssertEqual(message.macAlgorithmsServerToClient, ["hmac-sha2-256"])
+    }
+
     func testWeNegotiateTheClientsFirstPreference() throws {
         // Happy path key exchange test, but where the client would prefer AES128 and the server would prefer AES256.
         // We expect AES128, but the negotiation should be smooth.
@@ -1187,5 +1206,57 @@ extension SSHKeyExchangeStateMachineTests {
                 preconditionFailure("Unexpected message for testing: \(message)")
             }
         }
+    }
+}
+
+/// A transport protection scheme that exists only to occupy a slot in the negotiated algorithm lists.
+///
+/// None of the encryption entry points are reachable from the tests that use it.
+private class SharedMACTransportProtection: NIOSSHTransportProtection {
+    class var cipherName: String {
+        "stub-cipher-a"
+    }
+
+    class var macName: String? {
+        "hmac-sha2-256"
+    }
+
+    static var cipherBlockSize: Int {
+        16
+    }
+
+    static var keySizes: ExpectedKeySizes {
+        .init(ivSize: 12, encryptionKeySize: 16, macKeySize: 32)
+    }
+
+    var macBytes: Int {
+        32
+    }
+
+    var lengthEncrypted: Bool {
+        true
+    }
+
+    required init(initialKeys: NIOSSHSessionKeys) {}
+
+    func updateKeys(_ newKeys: NIOSSHSessionKeys) throws {}
+
+    func decryptFirstBlock(_ source: inout ByteBuffer) throws {
+        throw NIOSSHError.invalidEncryptedPacketLength
+    }
+
+    func decryptAndVerifyRemainingPacket(_ source: inout ByteBuffer, sequenceNumber: UInt32) throws -> ByteBuffer {
+        throw NIOSSHError.invalidEncryptedPacketLength
+    }
+
+    func encryptPacket(_ destination: inout ByteBuffer, sequenceNumber: UInt32) throws {
+        throw NIOSSHError.invalidEncryptedPacketLength
+    }
+}
+
+/// A second scheme with a different cipher name but the same MAC name as ``SharedMACTransportProtection``.
+private final class OtherSharedMACTransportProtection: SharedMACTransportProtection {
+    override class var cipherName: String {
+        "stub-cipher-b"
     }
 }
