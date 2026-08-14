@@ -574,7 +574,18 @@ struct SSHKeyExchangeStateMachine {
 
     /// The MAC algorithms supported by this peer, in order of preference.
     private var supportedMacAlgorithms: [Substring] {
-        let schemes = self.protectionSchemes.compactMap { $0.macName.map { Substring($0) } }
+        // Several protection schemes can share a MAC name: a cipher that supports multiple MACs must be
+        // registered once per MAC/cipher pair. A KEXINIT name-list must not repeat an entry, so we
+        // deduplicate here while preserving preference order.
+        var schemes = [Substring]()
+        for scheme in self.protectionSchemes {
+            guard let macName = scheme.macName.map({ Substring($0) }) else {
+                continue
+            }
+            if !schemes.contains(macName) {
+                schemes.append(macName)
+            }
+        }
 
         // We do a weird thing here: if there are no MAC schemes, we lie and put one in. This is
         // because some schemes (such as AES-GCM in OpenSSH mode) ignore the MAC negotiation.
