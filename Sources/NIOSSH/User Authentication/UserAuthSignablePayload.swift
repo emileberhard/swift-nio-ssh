@@ -32,7 +32,17 @@ import NIOCore
 internal struct UserAuthSignablePayload {
     private(set) var bytes: ByteBuffer
 
-    init(sessionIdentifier: ByteBuffer, userName: String, serviceName: String, publicKey: NIOSSHPublicKey) {
+    /// - Parameter algorithmName: The signature algorithm name. For every key type but RSA this is the key type
+    ///     itself; RSA keys (RFC 8332) may name `rsa-sha2-512`, `rsa-sha2-256`, or `ssh-rsa` here while the key
+    ///     blob below stays `ssh-rsa`. The signature must be produced with the same name, or the server will
+    ///     reject it.
+    init(
+        sessionIdentifier: ByteBuffer,
+        userName: String,
+        serviceName: String,
+        publicKey: NIOSSHPublicKey,
+        algorithmName: String.UTF8View
+    ) {
         // We use the session identifier as the base buffer and just append to it. We ask for 1kB because it's likely
         // enough for this data.
         var sessionIdentifier = sessionIdentifier
@@ -45,7 +55,7 @@ internal struct UserAuthSignablePayload {
         newBuffer.writeSSHString(serviceName.utf8)
         newBuffer.writeSSHString("publickey".utf8)
         newBuffer.writeSSHBoolean(true)
-        newBuffer.writeSSHString(publicKey.keyPrefix)
+        newBuffer.writeSSHString(algorithmName)
         newBuffer.writeCompositeSSHString { buffer in
             buffer.writeSSHHostKey(publicKey)
         }

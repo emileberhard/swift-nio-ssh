@@ -15,6 +15,7 @@
 import Crypto
 import NIOCore
 import XCTest
+import _CryptoExtras
 
 @testable import NIOSSH
 
@@ -334,6 +335,138 @@ final class SSHMessagesTests: XCTestCase {
             .init(username: "test", service: "ssh-connection", method: .publicKey(.unknown))
         )
         XCTAssertEqual(try buffer.readSSHMessage(), expectedMessage)
+    }
+
+    /// Reads the public key algorithm name out of a serialized `SSH_MSG_USERAUTH_REQUEST`.
+    private func publicKeyAlgorithmName(inUserAuthRequest buffer: ByteBuffer) throws -> String {
+        var buffer = buffer
+        XCTAssertEqual(buffer.readInteger(as: UInt8.self), SSHMessage.UserAuthRequestMessage.id)
+        for expected in ["test", "ssh-connection", "publickey"] {
+            XCTAssertEqual(buffer.readSSHString().map { String(buffer: $0) }, expected)
+        }
+        XCTAssertEqual(buffer.readSSHBoolean(), true)
+        return try XCTUnwrap(buffer.readSSHString().map { String(buffer: $0) })
+    }
+
+    func testRSAUserAuthRequestCarriesTheSignatureAlgorithmName() throws {
+        // RFC 8332: the key blob stays `ssh-rsa` but the algorithm name is the signature's flavor. All three
+        // places that name the algorithm — the wire field, the signed payload, and the signature itself — have
+        // to agree, or the server rejects the request.
+        let rsaKey = try NIOSSHPrivateKey(rsaKey: _RSA.Signing.PrivateKey(keySize: .bits2048))
+        var sessionID = ByteBufferAllocator().buffer(capacity: 32)
+        sessionID.writeString("session-identifier")
+
+        for algorithm in rsaKey.signatureAlgorithms {
+            let offer = NIOSSHUserAuthenticationOffer(
+                username: "test",
+                serviceName: "ssh-connection",
+                offer: .privateKey(.init(privateKey: rsaKey, signatureAlgorithm: algorithm))
+            )
+            let message = try SSHMessage.UserAuthRequestMessage(request: offer, sessionID: sessionID)
+
+            var buffer = ByteBufferAllocator().buffer(capacity: 1024)
+            buffer.writeSSHMessage(.userAuthRequest(message))
+            XCTAssertEqual(try self.publicKeyAlgorithmName(inUserAuthRequest: buffer), algorithm)
+            XCTAssertEqual(try buffer.readSSHMessage(), .userAuthRequest(message))
+
+            guard case .publicKey(.known(key: let key, signature: .some(let signature))) = message.method else {
+                XCTFail("Unexpected method \(message.method)")
+                return
+            }
+
+            // The key blob itself is always `ssh-rsa`, whatever the algorithm name says.
+            XCTAssertEqual(String(key.keyPrefix), "ssh-rsa")
+            XCTAssertEqual(String(signature.signatureAlgorithmName), algorithm)
+
+            let expectedPayload = UserAuthSignablePayload(
+                sessionIdentifier: sessionID,
+                userName: "test",
+                serviceName: "ssh-connection",
+                publicKey: key,
+                algorithmName: algorithm.utf8
+            )
+            XCTAssertTrue(key.isValidSignature(signature, for: expectedPayload))
+
+            // ... and a payload naming any other algorithm must not verify.
+            for other in rsaKey.signatureAlgorithms where other != algorithm {
+                let otherPayload = UserAuthSignablePayload(
+                    sessionIdentifier: sessionID,
+                    userName: "test",
+                    serviceName: "ssh-connection",
+                    publicKey: key,
+                    algorithmName: other.utf8
+                )
+                XCTAssertFalse(key.isValidSignature(signature, for: otherPayload))
+            }
+        }
+    }
+
+    func testRSAUserAuthRequestDefaultsToTheStrongestAlgorithm() throws {
+        let rsaKey = try NIOSSHPrivateKey(rsaKey: _RSA.Signing.PrivateKey(keySize: .bits2048))
+        var sessionID = ByteBufferAllocator().buffer(capacity: 32)
+        sessionID.writeString("session-identifier")
+
+        let offer = NIOSSHUserAuthenticationOffer(
+            username: "test",
+            serviceName: "ssh-connection",
+            offer: .privateKey(.init(privateKey: rsaKey))
+        )
+        let message = try SSHMessage.UserAuthRequestMessage(request: offer, sessionID: sessionID)
+
+        var buffer = ByteBufferAllocator().buffer(capacity: 1024)
+        buffer.writeSSHMessage(.userAuthRequest(message))
+        XCTAssertEqual(try self.publicKeyAlgorithmName(inUserAuthRequest: buffer), "rsa-sha2-512")
+    }
+
+    func testCertifiedUserAuthRequestStillNamesTheCertificate() throws {
+        // A certified key is offered under its certificate prefix, not under the algorithm its base key signs
+        // with. The RFC 8332 relaxation must not disturb that.
+        let key = NIOSSHPrivateKey(ed25519Key: .init())
+        let certifiedKey = try NIOSSHCertifiedPublicKey(
+            nonce: ByteBuffer(bytes: [1, 2, 3]),
+            serial: 0,
+            type: .user,
+            key: key.publicKey,
+            keyID: "key-id",
+            validPrincipals: ["test"],
+            validAfter: 0,
+            validBefore: .max,
+            criticalOptions: [:],
+            extensions: [:],
+            signatureKey: key.publicKey,
+            signature: key.sign(digest: SHA256.hash(data: Array("hello".utf8)))
+        )
+        var sessionID = ByteBufferAllocator().buffer(capacity: 32)
+        sessionID.writeString("session-identifier")
+
+        let offer = NIOSSHUserAuthenticationOffer(
+            username: "test",
+            serviceName: "ssh-connection",
+            offer: .privateKey(.init(privateKey: key, certifiedKey: certifiedKey))
+        )
+        let message = try SSHMessage.UserAuthRequestMessage(request: offer, sessionID: sessionID)
+
+        var buffer = ByteBufferAllocator().buffer(capacity: 2048)
+        buffer.writeSSHMessage(.userAuthRequest(message))
+        // NIOSSH's own reader does not recognise certificate algorithm names in user auth (it reports
+        // `.unknown`), which is upstream behaviour and not what this test is about: what matters is that the
+        // name on the wire is still the certificate's.
+        XCTAssertEqual(try self.publicKeyAlgorithmName(inUserAuthRequest: buffer), "ssh-ed25519-cert-v01@openssh.com")
+    }
+
+    func testUserAuthRequestRejectsAnAlgorithmTheKeyCannotSignWith() throws {
+        let rsaKey = try NIOSSHPrivateKey(rsaKey: _RSA.Signing.PrivateKey(keySize: .bits2048))
+        var sessionID = ByteBufferAllocator().buffer(capacity: 32)
+        sessionID.writeString("session-identifier")
+
+        let offer = NIOSSHUserAuthenticationOffer(
+            username: "test",
+            serviceName: "ssh-connection",
+            offer: .privateKey(.init(privateKey: rsaKey, signatureAlgorithm: "ssh-ed25519"))
+        )
+        XCTAssertThrowsError(try SSHMessage.UserAuthRequestMessage(request: offer, sessionID: sessionID)) { error in
+            XCTAssertEqual((error as? NIOSSHError)?.type, .unknownSignature)
+        }
     }
 
     func testUserAuthPKOKP256() throws {

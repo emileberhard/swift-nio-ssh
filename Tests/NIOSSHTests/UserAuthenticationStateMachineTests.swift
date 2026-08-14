@@ -16,6 +16,7 @@ import Crypto
 import NIOCore
 import NIOEmbedded
 import XCTest
+import _CryptoExtras
 
 @testable import NIOSSH
 
@@ -1006,7 +1007,8 @@ final class UserAuthenticationStateMachineTests: XCTestCase {
             sessionIdentifier: self.sessionID,
             userName: "foo",
             serviceName: "ssh-connection",
-            publicKey: self.hostKey.publicKey
+            publicKey: self.hostKey.publicKey,
+            algorithmName: self.hostKey.publicKey.keyPrefix
         )
         let signature = try self.hostKey.sign(payload)
         let request = SSHMessage.UserAuthRequestMessage(
@@ -1032,7 +1034,8 @@ final class UserAuthenticationStateMachineTests: XCTestCase {
             sessionIdentifier: self.sessionID,
             userName: "foo",
             serviceName: "ssh-connection",
-            publicKey: newKey.publicKey
+            publicKey: newKey.publicKey,
+            algorithmName: newKey.publicKey.keyPrefix
         )
         let newSignature = try newKey.sign(payload2)
         let request2 = SSHMessage.UserAuthRequestMessage(
@@ -1080,6 +1083,94 @@ final class UserAuthenticationStateMachineTests: XCTestCase {
         )
     }
 
+    func testServerAcceptsEveryRSASignatureAlgorithm() throws {
+        // The server reconstructs the signed payload from the signature's own algorithm name, so each of the
+        // three RFC 8332 flavors has to verify against a client offer made with that same flavor.
+        let clientKey = try NIOSSHPrivateKey(rsaKey: _RSA.Signing.PrivateKey(keySize: .bits2048))
+
+        for algorithm in clientKey.signatureAlgorithms {
+            var stateMachine = UserAuthenticationStateMachine(
+                role: .server(
+                    .init(hostKeys: [self.hostKey], userAuthDelegate: DenyThenAcceptDelegate(messagesToDeny: 0))
+                ),
+                loop: self.loop,
+                sessionID: self.sessionID
+            )
+
+            let serviceAccept = SSHMessage.ServiceAcceptMessage(service: "ssh-userauth")
+            XCTAssertNoThrow(
+                try self.serviceRequested(
+                    service: "ssh-userauth",
+                    nextMessage: serviceAccept,
+                    stateMachine: &stateMachine
+                )
+            )
+            stateMachine.sendServiceAccept(serviceAccept)
+
+            let offer = NIOSSHUserAuthenticationOffer(
+                username: "foo",
+                serviceName: "ssh-connection",
+                offer: .privateKey(.init(privateKey: clientKey, signatureAlgorithm: algorithm))
+            )
+            let request = try SSHMessage.UserAuthRequestMessage(request: offer, sessionID: self.sessionID)
+            try self.expectAuthRequestToSucceedSynchronously(request: request, stateMachine: &stateMachine)
+            stateMachine.sendUserAuthSuccess()
+        }
+    }
+
+    func testServerRejectsARelabelledRSASignature() throws {
+        // Relabelling a SHA-512 signature as SHA-256 must fail: the flavor selects the verification hash *and*
+        // is part of the signed payload, so a downgrade cannot be forged by editing the name.
+        let clientKey = try NIOSSHPrivateKey(rsaKey: _RSA.Signing.PrivateKey(keySize: .bits2048))
+
+        var stateMachine = UserAuthenticationStateMachine(
+            role: .server(.init(hostKeys: [self.hostKey], userAuthDelegate: DenyThenAcceptDelegate(messagesToDeny: 0))),
+            loop: self.loop,
+            sessionID: self.sessionID
+        )
+
+        let serviceAccept = SSHMessage.ServiceAcceptMessage(service: "ssh-userauth")
+        XCTAssertNoThrow(
+            try self.serviceRequested(service: "ssh-userauth", nextMessage: serviceAccept, stateMachine: &stateMachine)
+        )
+        stateMachine.sendServiceAccept(serviceAccept)
+
+        let offer = NIOSSHUserAuthenticationOffer(
+            username: "foo",
+            serviceName: "ssh-connection",
+            offer: .privateKey(.init(privateKey: clientKey, signatureAlgorithm: "rsa-sha2-512"))
+        )
+        let honest = try SSHMessage.UserAuthRequestMessage(request: offer, sessionID: self.sessionID)
+        guard case .publicKey(.known(key: let key, signature: .some(let signature))) = honest.method,
+            case .rsa(_, let rawSignature) = signature.backingSignature
+        else {
+            XCTFail("Unexpected method \(honest.method)")
+            return
+        }
+
+        let request = SSHMessage.UserAuthRequestMessage(
+            username: "foo",
+            service: "ssh-connection",
+            method: .publicKey(
+                .known(
+                    key: key,
+                    signature: NIOSSHSignature(backingSignature: .rsa(flavor: .sha256, signature: rawSignature))
+                )
+            )
+        )
+        try self.expectAuthRequestToFailSynchronously(
+            request: request,
+            expecting: .init(
+                authentications: NIOSSHAvailableUserAuthenticationMethods.all.strings,
+                partialSuccess: false
+            ),
+            stateMachine: &stateMachine
+        )
+        stateMachine.sendUserAuthFailure(
+            .init(authentications: NIOSSHAvailableUserAuthenticationMethods.all.strings, partialSuccess: false)
+        )
+    }
+
     func testPrivateKeyClientAuthFlow() throws {
         let delegate = InfinitePrivateKeyDelegate()
         var stateMachine = UserAuthenticationStateMachine(
@@ -1095,7 +1186,8 @@ final class UserAuthenticationStateMachineTests: XCTestCase {
             sessionIdentifier: self.sessionID,
             userName: "foo",
             serviceName: "ssh-connection",
-            publicKey: delegate.key.publicKey
+            publicKey: delegate.key.publicKey,
+            algorithmName: delegate.key.publicKey.keyPrefix
         )
         let signature = try delegate.key.sign(dataToSign)
         let firstMessage = SSHMessage.UserAuthRequestMessage(
@@ -1142,7 +1234,8 @@ final class UserAuthenticationStateMachineTests: XCTestCase {
             sessionIdentifier: self.sessionID,
             userName: "foo",
             serviceName: "ssh-connection",
-            publicKey: NIOSSHPublicKey(delegate.certifiedKey)
+            publicKey: NIOSSHPublicKey(delegate.certifiedKey),
+            algorithmName: NIOSSHPublicKey(delegate.certifiedKey).keyPrefix
         )
         let signature = try delegate.privateKey.sign(dataToSign)
 

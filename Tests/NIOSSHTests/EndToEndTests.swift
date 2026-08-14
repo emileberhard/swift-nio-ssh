@@ -16,6 +16,7 @@ import Crypto
 import NIOCore
 import NIOEmbedded
 import XCTest
+import _CryptoExtras
 
 @testable import NIOSSH
 
@@ -168,9 +169,11 @@ final class UserEventExpecter: ChannelInboundHandler {
 
 final class PrivateKeyClientAuth: NIOSSHClientUserAuthenticationDelegate {
     private var key: NIOSSHPrivateKey?
+    private let signatureAlgorithm: String?
 
-    init(_ key: NIOSSHPrivateKey) {
+    init(_ key: NIOSSHPrivateKey, signatureAlgorithm: String? = nil) {
         self.key = key
+        self.signatureAlgorithm = signatureAlgorithm
     }
 
     func nextAuthenticationType(
@@ -184,7 +187,11 @@ final class PrivateKeyClientAuth: NIOSSHClientUserAuthenticationDelegate {
 
         self.key = nil
         nextChallengePromise.succeed(
-            .init(username: "foo", serviceName: "ssh-connection", offer: .privateKey(.init(privateKey: key)))
+            .init(
+                username: "foo",
+                serviceName: "ssh-connection",
+                offer: .privateKey(.init(privateKey: key, signatureAlgorithm: self.signatureAlgorithm))
+            )
         )
     }
 }
@@ -474,6 +481,29 @@ class EndToEndTests: XCTestCase {
         promise.futureResult.whenFailure { error in err.value = error }
         handler?.sendTCPForwardingRequest(.listen(host: "localhost", port: 1234), promise: promise)
         XCTAssertEqual(err.value as? ChannelError, .ioOnClosedChannel)
+    }
+
+    func testRSAUserAuthWithEverySignatureAlgorithm() throws {
+        let key = try NIOSSHPrivateKey(rsaKey: _RSA.Signing.PrivateKey(keySize: .bits2048))
+
+        for algorithm in key.signatureAlgorithms {
+            // Each iteration needs its own channel pair: the handshake happens once per connection.
+            let channel = BackToBackEmbeddedChannel()
+
+            var harness = TestHarness()
+            harness.clientAuthDelegate = PrivateKeyClientAuth(key, signatureAlgorithm: algorithm)
+            harness.serverAuthDelegate = ExpectPublicKeyAuth(key.publicKey)
+
+            XCTAssertNoThrow(try channel.configureWithHarness(harness))
+            XCTAssertNoThrow(try channel.activate())
+            XCTAssertNoThrow(try channel.interactInMemory())
+
+            _ = try channel.createNewChannel()
+            XCTAssertNoThrow(try channel.interactInMemory())
+            XCTAssertEqual(channel.activeServerChannels.count, 1, "failed for \(algorithm)")
+
+            try channel.finish()
+        }
     }
 
     func testSecureEnclaveKeys() throws {

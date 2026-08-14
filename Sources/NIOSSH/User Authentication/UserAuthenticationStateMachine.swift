@@ -478,11 +478,15 @@ extension UserAuthenticationStateMachine {
 
         case .publicKey(.known(key: let key, signature: .some(let signature))):
             // This is a direct request to auth, just pass it through.
+            // The client signed its own choice of algorithm name into the payload, and the signature carries
+            // that choice, so reconstruct the bytes from the signature rather than from the key type. A client
+            // whose wire algorithm name disagreed with its signature simply fails to verify.
             let dataToSign = UserAuthSignablePayload(
                 sessionIdentifier: sessionID,
                 userName: request.username,
                 serviceName: request.service,
-                publicKey: key
+                publicKey: key,
+                algorithmName: key.offeredAlgorithmName(for: signature)
             )
             let supportedMethods = delegate.supportedAuthenticationMethods
 

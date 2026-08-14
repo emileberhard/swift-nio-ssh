@@ -237,6 +237,19 @@ extension NIOSSHPublicKey {
             return name.elementsEqual(self.keyPrefix)
         }
     }
+
+    /// The algorithm name under which `signature` is offered for this key in user auth.
+    ///
+    /// This is the signature's own algorithm name for every key that can be offered under it — which for RSA
+    /// is the flavor that was actually used (RFC 8332). A certified key is the exception: it is offered under
+    /// its certificate prefix, not under the algorithm its base key signed with.
+    ///
+    /// Both the writer of `SSH_MSG_USERAUTH_REQUEST` and the server verifying it use this, because the name on
+    /// the wire and the name inside the signed payload have to be the same string.
+    internal func offeredAlgorithmName(for signature: NIOSSHSignature) -> String.UTF8View {
+        let name = signature.signatureAlgorithmName
+        return self.acceptsSignatureAlgorithm(name) ? name : self.keyPrefix
+    }
 }
 
 /// An RSA public key, together with the wire-format primitives needed to serialize it.

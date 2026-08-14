@@ -141,14 +141,15 @@ final class HostKeyTests: XCTestCase {
         let sshKey = try assertNoThrowWithValue(NIOSSHPrivateKey(rsaKey: Self.sharedRSAKey))
         var sessionIdentifier = ByteBufferAllocator().buffer(capacity: 32)
         sessionIdentifier.writeString("hello, world!")
-        let payload = UserAuthSignablePayload(
-            sessionIdentifier: sessionIdentifier,
-            userName: "user",
-            serviceName: "ssh-connection",
-            publicKey: sshKey.publicKey
-        )
 
         for algorithm in sshKey.signatureAlgorithms {
+            let payload = UserAuthSignablePayload(
+                sessionIdentifier: sessionIdentifier,
+                userName: "user",
+                serviceName: "ssh-connection",
+                publicKey: sshKey.publicKey,
+                algorithmName: algorithm.utf8
+            )
             let signature = try assertNoThrowWithValue(sshKey.sign(payload, algorithm: algorithm[...]))
             XCTAssertEqual(String(signature.signatureAlgorithmName), algorithm)
             XCTAssertTrue(sshKey.publicKey.isValidSignature(signature, for: payload))
