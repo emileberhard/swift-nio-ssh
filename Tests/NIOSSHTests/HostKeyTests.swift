@@ -253,8 +253,9 @@ final class HostKeyTests: XCTestCase {
     }
 
     func testUnrecognisedKey() throws {
+        // `ssh-rsa` used to stand in here, but this fork supports it. DSA never will.
         var buffer = ByteBufferAllocator().buffer(capacity: 1024)
-        buffer.writeSSHString("ssh-rsa".utf8)
+        buffer.writeSSHString("ssh-dss".utf8)
 
         XCTAssertThrowsError(try buffer.readSSHHostKey()) { error in
             XCTAssertEqual((error as? NIOSSHError).map { $0.type }, .unknownPublicKey)

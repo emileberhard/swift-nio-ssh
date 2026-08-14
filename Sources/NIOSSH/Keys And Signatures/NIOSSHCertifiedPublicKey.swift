@@ -231,6 +231,12 @@ public struct NIOSSHCertifiedPublicKey {
         signatureKey: NIOSSHPublicKey,
         signature: NIOSSHSignature
     ) throws {
+        if case .rsa = key.backingKey {
+            // There is no `ssh-rsa-cert-v01@openssh.com` mapping in `baseKeyPrefixForKeyPrefix`, so an RSA base
+            // key could never be serialized or parsed back. Reject it here rather than trapping later.
+            throw NIOSSHError.unknownPublicKey(algorithm: "ssh-rsa certificate")
+        }
+
         self.backing = try Backing(
             nonce: nonce,
             serial: serial,
@@ -359,6 +365,8 @@ extension NIOSSHCertifiedPublicKey {
             return Self.p384KeyPrefix
         case .ecdsaP521:
             return Self.p521KeyPrefix
+        case .rsa:
+            preconditionFailure("base key cannot be RSA: rejected at construction and unparseable from the wire")
         case .certified:
             preconditionFailure("base key cannot be certified")
         }

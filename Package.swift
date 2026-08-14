@@ -38,7 +38,9 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.81.0"),
-        .package(url: "https://github.com/apple/swift-crypto.git", "1.0.0"..<"4.0.0"),
+        // AgenTTY fork: raised from "1.0.0" because `_RSA.Signing.PublicKey.init(n:e:)` and `getKeyPrimitives()`
+        // are recent additions, and a standalone `swift test` must not resolve a version that lacks them.
+        .package(url: "https://github.com/apple/swift-crypto.git", "3.15.0"..<"4.0.0"),
         .package(url: "https://github.com/apple/swift-atomics.git", from: "1.0.2"),
     ],
     targets: [
@@ -49,6 +51,7 @@ let package = Package(
                 .product(name: "NIOConcurrencyHelpers", package: "swift-nio"),
                 .product(name: "NIOFoundationCompat", package: "swift-nio"),
                 .product(name: "Crypto", package: "swift-crypto"),
+                .product(name: "_CryptoExtras", package: "swift-crypto"),
                 .product(name: "Atomics", package: "swift-atomics"),
             ],
             swiftSettings: swiftSettings
@@ -91,6 +94,7 @@ let package = Package(
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOEmbedded", package: "swift-nio"),
                 .product(name: "NIOFoundationCompat", package: "swift-nio"),
+                .product(name: "_CryptoExtras", package: "swift-crypto"),
             ],
             swiftSettings: swiftSettings
         ),
