@@ -483,6 +483,32 @@ class EndToEndTests: XCTestCase {
         XCTAssertEqual(err.value as? ChannelError, .ioOnClosedChannel)
     }
 
+    func testRSAHostKeyAndRSAUserAuth() throws {
+        // RSA on both sides at once: the host key signs the exchange hash with the negotiated algorithm, and
+        // the user key signs the auth payload with its own.
+        let hostKey = try NIOSSHPrivateKey(rsaKey: _RSA.Signing.PrivateKey(keySize: .bits2048))
+        let userKey = try NIOSSHPrivateKey(rsaKey: _RSA.Signing.PrivateKey(keySize: .bits2048))
+
+        for algorithm in userKey.signatureAlgorithms {
+            let channel = BackToBackEmbeddedChannel()
+
+            var harness = TestHarness()
+            harness.serverHostKeys = [hostKey]
+            harness.clientAuthDelegate = PrivateKeyClientAuth(userKey, signatureAlgorithm: algorithm)
+            harness.serverAuthDelegate = ExpectPublicKeyAuth(userKey.publicKey)
+
+            XCTAssertNoThrow(try channel.configureWithHarness(harness))
+            XCTAssertNoThrow(try channel.activate())
+            XCTAssertNoThrow(try channel.interactInMemory())
+
+            _ = try channel.createNewChannel()
+            XCTAssertNoThrow(try channel.interactInMemory())
+            XCTAssertEqual(channel.activeServerChannels.count, 1, "failed for \(algorithm)")
+
+            try channel.finish()
+        }
+    }
+
     func testRSAUserAuthWithEverySignatureAlgorithm() throws {
         let key = try NIOSSHPrivateKey(rsaKey: _RSA.Signing.PrivateKey(keySize: .bits2048))
 

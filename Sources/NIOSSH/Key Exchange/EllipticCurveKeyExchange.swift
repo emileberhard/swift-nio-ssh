@@ -34,14 +34,16 @@ protocol EllipticCurveKeyExchangeProtocol: _NIOSSHSendableMetatype {
         serverHostKey: NIOSSHPrivateKey,
         initialExchangeBytes: inout ByteBuffer,
         allocator: ByteBufferAllocator,
-        expectedKeySizes: ExpectedKeySizes
+        expectedKeySizes: ExpectedKeySizes,
+        negotiatedHostKeyAlgorithm: Substring
     ) throws -> (KeyExchangeResult, SSHMessage.KeyExchangeECDHReplyMessage)
 
     mutating func receiveServerKeyExchangePayload(
         serverKeyExchangeMessage message: SSHMessage.KeyExchangeECDHReplyMessage,
         initialExchangeBytes: inout ByteBuffer,
         allocator: ByteBufferAllocator,
-        expectedKeySizes: ExpectedKeySizes
+        expectedKeySizes: ExpectedKeySizes,
+        negotiatedHostKeyAlgorithm: Substring
     ) throws -> KeyExchangeResult
 
     static var keyExchangeAlgorithmNames: [Substring] { get }
@@ -87,12 +89,15 @@ extension EllipticCurveKeyExchange {
     ///     - initialExchangeBytes: The initial bytes of the exchange, suitable for writing into the exchange hash.
     ///     - allocator: A `ByteBufferAllocator` suitable for this connection.
     ///     - expectedKeySizes: The sizes of the keys we need to generate.
+    ///     - negotiatedHostKeyAlgorithm: The host key algorithm the peers agreed on. For RSA this selects the
+    ///         signature hash (RFC 8332); for every other key type it is the key type itself.
     mutating func completeKeyExchangeServerSide(
         clientKeyExchangeMessage message: SSHMessage.KeyExchangeECDHInitMessage,
         serverHostKey: NIOSSHPrivateKey,
         initialExchangeBytes: inout ByteBuffer,
         allocator: ByteBufferAllocator,
-        expectedKeySizes: ExpectedKeySizes
+        expectedKeySizes: ExpectedKeySizes,
+        negotiatedHostKeyAlgorithm: Substring
     ) throws -> (KeyExchangeResult, SSHMessage.KeyExchangeECDHReplyMessage) {
         precondition(self.ourRole.isServer, "Only servers may receive a client key exchange packet!")
 
@@ -106,7 +111,10 @@ extension EllipticCurveKeyExchange {
         )
 
         // We should now sign the exchange hash.
-        let exchangeHashSignature = try serverHostKey.sign(digest: kexResult.exchangeHash)
+        let exchangeHashSignature = try serverHostKey.sign(
+            digest: kexResult.exchangeHash,
+            algorithm: negotiatedHostKeyAlgorithm
+        )
 
         // Ok, time to write the final message. We need to write our public key into it.
         // The largest key we're likely to end up with here is 256 bytes.
@@ -132,11 +140,14 @@ extension EllipticCurveKeyExchange {
     ///     - initialExchangeBytes: The initial bytes of the exchange, suitable for writing into the exchange hash.
     ///     - allocator: A `ByteBufferAllocator` suitable for this connection.
     ///     - expectedKeySizes: The sizes of the keys we need to generate.
+    ///     - negotiatedHostKeyAlgorithm: The host key algorithm the peers agreed on. The server's signature
+    ///         must actually use it, or an RSA server could negotiate `rsa-sha2-512` and then sign with SHA-1.
     mutating func receiveServerKeyExchangePayload(
         serverKeyExchangeMessage message: SSHMessage.KeyExchangeECDHReplyMessage,
         initialExchangeBytes: inout ByteBuffer,
         allocator: ByteBufferAllocator,
-        expectedKeySizes: ExpectedKeySizes
+        expectedKeySizes: ExpectedKeySizes,
+        negotiatedHostKeyAlgorithm: Substring
     ) throws -> KeyExchangeResult {
         precondition(self.ourRole.isClient, "Only clients may receive a server key exchange packet!")
 
@@ -156,6 +167,15 @@ extension EllipticCurveKeyExchange {
             allocator: allocator,
             expectedKeySizes: expectedKeySizes
         )
+
+        // The signature has to be made with the algorithm we negotiated, not merely one this key supports:
+        // otherwise a server could agree to `rsa-sha2-512` and then hand us a SHA-1 signature.
+        guard message.signature.signatureAlgorithmName.elementsEqual(negotiatedHostKeyAlgorithm.utf8) else {
+            throw NIOSSHError.invalidHostKeyForKeyExchange(
+                expected: negotiatedHostKeyAlgorithm,
+                got: message.signature.signatureAlgorithmName
+            )
+        }
 
         // We can now verify signature over the exchange hash.
         guard message.hostKey.isValidSignature(message.signature, for: kexResult.exchangeHash) else {

@@ -16,6 +16,7 @@ import Crypto
 import NIOCore
 import NIOEmbedded
 import XCTest
+import _CryptoExtras
 
 @testable import NIOSSH
 
@@ -622,6 +623,154 @@ final class SSHKeyExchangeStateMachineTests: XCTestCase {
         XCTAssertTrue(serverInboundProtection === serverOutboundProtection)
 
         self.assertCompatibleProtection(client: clientInboundProtection, server: serverInboundProtection)
+    }
+
+    func testKeyExchangeUsingRSAHostKeysOnly() throws {
+        try self.straightforwardCustomHostKeyHandshake(
+            hostKey: .init(rsaKey: _RSA.Signing.PrivateKey(keySize: .bits2048))
+        )
+    }
+
+    func testClientPrefersModernHostKeyAlgorithmsAndOffersSHA1RSALast() throws {
+        // Order is the whole security argument for advertising `ssh-rsa` at all: negotiation takes the client's
+        // first mutually supported entry, so SHA-1 is reachable only when a server offers nothing else.
+        let client = SSHKeyExchangeStateMachine(
+            allocator: ByteBufferAllocator(),
+            loop: EmbeddedEventLoop(),
+            role: .client(
+                .init(userAuthDelegate: ExplodingAuthDelegate(), serverAuthDelegate: AcceptAllHostKeysDelegate())
+            ),
+            remoteVersion: Constants.version,
+            protectionSchemes: [AES256GCMOpenSSHTransportProtection.self],
+            previousSessionIdentifier: nil
+        )
+
+        XCTAssertEqual(
+            client.createKeyExchangeMessage().serverHostKeyAlgorithms,
+            [
+                "ssh-ed25519", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp521",
+                "rsa-sha2-512", "rsa-sha2-256", "ssh-rsa",
+            ]
+        )
+    }
+
+    func testRSAServerAdvertisesEverySignatureAlgorithm() throws {
+        let server = try SSHKeyExchangeStateMachine(
+            allocator: ByteBufferAllocator(),
+            loop: EmbeddedEventLoop(),
+            role: .server(
+                .init(
+                    hostKeys: [.init(rsaKey: _RSA.Signing.PrivateKey(keySize: .bits2048))],
+                    userAuthDelegate: DenyAllServerAuthDelegate()
+                )
+            ),
+            remoteVersion: Constants.version,
+            protectionSchemes: [AES256GCMOpenSSHTransportProtection.self],
+            previousSessionIdentifier: nil
+        )
+
+        XCTAssertEqual(
+            server.createKeyExchangeMessage().serverHostKeyAlgorithms,
+            ["rsa-sha2-512", "rsa-sha2-256", "ssh-rsa"]
+        )
+    }
+
+    func testRSAHostKeyNegotiatesTheStrongestSharedAlgorithm() throws {
+        let allocator = ByteBufferAllocator()
+        let loop = EmbeddedEventLoop()
+        let hostKey = try NIOSSHPrivateKey(rsaKey: _RSA.Signing.PrivateKey(keySize: .bits2048))
+
+        var client = SSHKeyExchangeStateMachine(
+            allocator: allocator,
+            loop: loop,
+            role: .client(
+                .init(userAuthDelegate: ExplodingAuthDelegate(), serverAuthDelegate: AcceptAllHostKeysDelegate())
+            ),
+            remoteVersion: Constants.version,
+            protectionSchemes: [AES256GCMOpenSSHTransportProtection.self],
+            previousSessionIdentifier: nil
+        )
+        var server = SSHKeyExchangeStateMachine(
+            allocator: allocator,
+            loop: loop,
+            role: .server(.init(hostKeys: [hostKey], userAuthDelegate: DenyAllServerAuthDelegate())),
+            remoteVersion: Constants.version,
+            protectionSchemes: [AES256GCMOpenSSHTransportProtection.self],
+            previousSessionIdentifier: nil
+        )
+
+        let serverMessage = server.createKeyExchangeMessage()
+        let clientMessage = client.createKeyExchangeMessage()
+        server.send(keyExchange: serverMessage)
+        client.send(keyExchange: clientMessage)
+
+        try self.assertGeneratesNoMessage(server.handle(keyExchange: clientMessage))
+        let ecdhInit = try assertGeneratesECDHKeyExchangeInit(client.handle(keyExchange: serverMessage))
+
+        XCTAssertEqual(client._testOnly_negotiatedHostKeyAlgorithm, "rsa-sha2-512")
+        XCTAssertEqual(server._testOnly_negotiatedHostKeyAlgorithm, "rsa-sha2-512")
+
+        client.send(keyExchangeInit: ecdhInit)
+        let ecdhReply = try assertGeneratesECDHKeyExchangeReplyAndNewKeys(server.handle(keyExchangeInit: ecdhInit))
+
+        // The server signed with the negotiated algorithm, and the key blob is still plain `ssh-rsa`.
+        XCTAssertEqual(String(ecdhReply.signature.signatureAlgorithmName), "rsa-sha2-512")
+        XCTAssertEqual(String(ecdhReply.hostKey.keyPrefix), "ssh-rsa")
+    }
+
+    func testClientRejectsADowngradedRSAExchangeHashSignature() throws {
+        // The server negotiates `rsa-sha2-512` and then signs with SHA-1. The signature would verify against
+        // the key, so only the algorithm-name check catches this.
+        let allocator = ByteBufferAllocator()
+        let loop = EmbeddedEventLoop()
+        let hostKey = try NIOSSHPrivateKey(rsaKey: _RSA.Signing.PrivateKey(keySize: .bits2048))
+
+        var client = SSHKeyExchangeStateMachine(
+            allocator: allocator,
+            loop: loop,
+            role: .client(
+                .init(userAuthDelegate: ExplodingAuthDelegate(), serverAuthDelegate: AcceptAllHostKeysDelegate())
+            ),
+            remoteVersion: Constants.version,
+            protectionSchemes: [AES256GCMOpenSSHTransportProtection.self],
+            previousSessionIdentifier: nil
+        )
+        var server = SSHKeyExchangeStateMachine(
+            allocator: allocator,
+            loop: loop,
+            role: .server(.init(hostKeys: [hostKey], userAuthDelegate: DenyAllServerAuthDelegate())),
+            remoteVersion: Constants.version,
+            protectionSchemes: [AES256GCMOpenSSHTransportProtection.self],
+            previousSessionIdentifier: nil
+        )
+
+        let serverMessage = server.createKeyExchangeMessage()
+        let clientMessage = client.createKeyExchangeMessage()
+        server.send(keyExchange: serverMessage)
+        client.send(keyExchange: clientMessage)
+
+        try self.assertGeneratesNoMessage(server.handle(keyExchange: clientMessage))
+        let ecdhInit = try assertGeneratesECDHKeyExchangeInit(client.handle(keyExchange: serverMessage))
+        client.send(keyExchangeInit: ecdhInit)
+
+        var ecdhReply = try assertGeneratesECDHKeyExchangeReplyAndNewKeys(server.handle(keyExchangeInit: ecdhInit))
+        XCTAssertNoThrow(try server.send(keyExchangeReply: ecdhReply))
+
+        // Re-sign the same exchange hash with SHA-1. The client must reject it on the algorithm name alone.
+        guard
+            case .rsa(_, let downgraded) = try hostKey.sign(
+                digest: SHA256.hash(data: Array("some other data".utf8)),
+                algorithm: "ssh-rsa"
+            ).backingSignature
+        else {
+            XCTFail("Expected an RSA signature")
+            return
+        }
+        ecdhReply.signature = NIOSSHSignature(backingSignature: .rsa(flavor: .sha1, signature: downgraded))
+
+        XCTAssertThrowsError(try client.handle(keyExchangeReply: ecdhReply)) { error in
+            XCTAssertEqual((error as? NIOSSHError)?.type, .invalidHostKeyForKeyExchange)
+        }
     }
 
     func testKeyExchangeMessageCookieValidation() throws {

@@ -75,7 +75,8 @@ final class KeyExchangeTests: XCTestCase {
                 serverHostKey: serverHostKey,
                 initialExchangeBytes: &initialExchangeBytes,
                 allocator: ByteBufferAllocator(),
-                expectedKeySizes: AES128GCMOpenSSHTransportProtection.keySizes
+                expectedKeySizes: AES128GCMOpenSSHTransportProtection.keySizes,
+                negotiatedHostKeyAlgorithm: serverHostKey.hostKeyAlgorithms[0]
             )
         )
 
@@ -86,7 +87,8 @@ final class KeyExchangeTests: XCTestCase {
                 serverKeyExchangeMessage: serverResponse,
                 initialExchangeBytes: &initialExchangeBytes,
                 allocator: ByteBufferAllocator(),
-                expectedKeySizes: AES128GCMOpenSSHTransportProtection.keySizes
+                expectedKeySizes: AES128GCMOpenSSHTransportProtection.keySizes,
+                negotiatedHostKeyAlgorithm: serverHostKey.hostKeyAlgorithms[0]
             )
         )
 
@@ -135,7 +137,8 @@ final class KeyExchangeTests: XCTestCase {
                 serverHostKey: serverHostKey,
                 initialExchangeBytes: &initialExchangeBytes,
                 allocator: ByteBufferAllocator(),
-                expectedKeySizes: AES128GCMOpenSSHTransportProtection.keySizes
+                expectedKeySizes: AES128GCMOpenSSHTransportProtection.keySizes,
+                negotiatedHostKeyAlgorithm: serverHostKey.hostKeyAlgorithms[0]
             )
         )
 
@@ -146,7 +149,8 @@ final class KeyExchangeTests: XCTestCase {
                 serverKeyExchangeMessage: serverResponse,
                 initialExchangeBytes: &initialExchangeBytes,
                 allocator: ByteBufferAllocator(),
-                expectedKeySizes: AES128GCMOpenSSHTransportProtection.keySizes
+                expectedKeySizes: AES128GCMOpenSSHTransportProtection.keySizes,
+                negotiatedHostKeyAlgorithm: serverHostKey.hostKeyAlgorithms[0]
             )
         )
 
@@ -174,7 +178,8 @@ final class KeyExchangeTests: XCTestCase {
                 serverHostKey: serverHostKey,
                 initialExchangeBytes: &initialExchangeBytes,
                 allocator: ByteBufferAllocator(),
-                expectedKeySizes: AES128GCMOpenSSHTransportProtection.keySizes
+                expectedKeySizes: AES128GCMOpenSSHTransportProtection.keySizes,
+                negotiatedHostKeyAlgorithm: serverHostKey.hostKeyAlgorithms[0]
             )
         )
 
@@ -185,7 +190,8 @@ final class KeyExchangeTests: XCTestCase {
                 serverKeyExchangeMessage: serverResponse,
                 initialExchangeBytes: &initialExchangeBytes,
                 allocator: ByteBufferAllocator(),
-                expectedKeySizes: AES128GCMOpenSSHTransportProtection.keySizes
+                expectedKeySizes: AES128GCMOpenSSHTransportProtection.keySizes,
+                negotiatedHostKeyAlgorithm: serverHostKey.hostKeyAlgorithms[0]
             )
         )
 
@@ -213,7 +219,8 @@ final class KeyExchangeTests: XCTestCase {
                 serverHostKey: serverHostKey,
                 initialExchangeBytes: &initialExchangeBytes,
                 allocator: ByteBufferAllocator(),
-                expectedKeySizes: AES128GCMOpenSSHTransportProtection.keySizes
+                expectedKeySizes: AES128GCMOpenSSHTransportProtection.keySizes,
+                negotiatedHostKeyAlgorithm: serverHostKey.hostKeyAlgorithms[0]
             )
         )
 
@@ -224,7 +231,8 @@ final class KeyExchangeTests: XCTestCase {
                 serverKeyExchangeMessage: serverResponse,
                 initialExchangeBytes: &initialExchangeBytes,
                 allocator: ByteBufferAllocator(),
-                expectedKeySizes: AES128GCMOpenSSHTransportProtection.keySizes
+                expectedKeySizes: AES128GCMOpenSSHTransportProtection.keySizes,
+                negotiatedHostKeyAlgorithm: serverHostKey.hostKeyAlgorithms[0]
             )
         )
 
@@ -252,7 +260,8 @@ final class KeyExchangeTests: XCTestCase {
                 serverHostKey: serverHostKey,
                 initialExchangeBytes: &initialExchangeBytes,
                 allocator: ByteBufferAllocator(),
-                expectedKeySizes: AES128GCMOpenSSHTransportProtection.keySizes
+                expectedKeySizes: AES128GCMOpenSSHTransportProtection.keySizes,
+                negotiatedHostKeyAlgorithm: serverHostKey.hostKeyAlgorithms[0]
             )
         )
 
@@ -263,7 +272,8 @@ final class KeyExchangeTests: XCTestCase {
                 serverKeyExchangeMessage: serverResponse,
                 initialExchangeBytes: &initialExchangeBytes,
                 allocator: ByteBufferAllocator(),
-                expectedKeySizes: AES128GCMOpenSSHTransportProtection.keySizes
+                expectedKeySizes: AES128GCMOpenSSHTransportProtection.keySizes,
+                negotiatedHostKeyAlgorithm: serverHostKey.hostKeyAlgorithms[0]
             )
         )
 
@@ -291,7 +301,8 @@ final class KeyExchangeTests: XCTestCase {
                 serverHostKey: serverHostKey,
                 initialExchangeBytes: &initialExchangeBytes,
                 allocator: ByteBufferAllocator(),
-                expectedKeySizes: AES256GCMOpenSSHTransportProtection.keySizes
+                expectedKeySizes: AES256GCMOpenSSHTransportProtection.keySizes,
+                negotiatedHostKeyAlgorithm: serverHostKey.hostKeyAlgorithms[0]
             )
         )
 
@@ -302,7 +313,8 @@ final class KeyExchangeTests: XCTestCase {
                 serverKeyExchangeMessage: serverResponse,
                 initialExchangeBytes: &initialExchangeBytes,
                 allocator: ByteBufferAllocator(),
-                expectedKeySizes: AES256GCMOpenSSHTransportProtection.keySizes
+                expectedKeySizes: AES256GCMOpenSSHTransportProtection.keySizes,
+                negotiatedHostKeyAlgorithm: serverHostKey.hostKeyAlgorithms[0]
             )
         )
 
@@ -334,7 +346,8 @@ final class KeyExchangeTests: XCTestCase {
                 serverHostKey: serverHostKey,
                 initialExchangeBytes: &serverInitialBytes,
                 allocator: ByteBufferAllocator(),
-                expectedKeySizes: AES128GCMOpenSSHTransportProtection.keySizes
+                expectedKeySizes: AES128GCMOpenSSHTransportProtection.keySizes,
+                negotiatedHostKeyAlgorithm: serverHostKey.hostKeyAlgorithms[0]
             )
         )
 
@@ -343,7 +356,8 @@ final class KeyExchangeTests: XCTestCase {
                 serverKeyExchangeMessage: serverResponse,
                 initialExchangeBytes: &clientInitialBytes,
                 allocator: ByteBufferAllocator(),
-                expectedKeySizes: AES128GCMOpenSSHTransportProtection.keySizes
+                expectedKeySizes: AES128GCMOpenSSHTransportProtection.keySizes,
+                negotiatedHostKeyAlgorithm: serverHostKey.hostKeyAlgorithms[0]
             )
         ) { error in
             XCTAssertEqual((error as? NIOSSHError).map { $0.type }, .invalidExchangeHashSignature)
@@ -370,7 +384,8 @@ final class KeyExchangeTests: XCTestCase {
                 serverHostKey: serverHostKey,
                 initialExchangeBytes: &initialExchangeBytes,
                 allocator: ByteBufferAllocator(),
-                expectedKeySizes: AES128GCMOpenSSHTransportProtection.keySizes
+                expectedKeySizes: AES128GCMOpenSSHTransportProtection.keySizes,
+                negotiatedHostKeyAlgorithm: serverHostKey.hostKeyAlgorithms[0]
             )
         )
 
@@ -386,7 +401,8 @@ final class KeyExchangeTests: XCTestCase {
                 serverKeyExchangeMessage: serverResponse,
                 initialExchangeBytes: &initialExchangeBytes,
                 allocator: ByteBufferAllocator(),
-                expectedKeySizes: AES128GCMOpenSSHTransportProtection.keySizes
+                expectedKeySizes: AES128GCMOpenSSHTransportProtection.keySizes,
+                negotiatedHostKeyAlgorithm: serverHostKey.hostKeyAlgorithms[0]
             )
         ) { error in
             XCTAssertEqual((error as? NIOSSHError).map { $0.type }, .invalidExchangeHashSignature)
@@ -481,7 +497,8 @@ final class KeyExchangeTests: XCTestCase {
                 serverHostKey: serverHostKey,
                 initialExchangeBytes: &initialExchangeBytes,
                 allocator: ByteBufferAllocator(),
-                expectedKeySizes: wideKeySizes
+                expectedKeySizes: wideKeySizes,
+                negotiatedHostKeyAlgorithm: serverHostKey.hostKeyAlgorithms[0]
             )
         )
 
@@ -492,7 +509,8 @@ final class KeyExchangeTests: XCTestCase {
                 serverKeyExchangeMessage: serverResponse,
                 initialExchangeBytes: &initialExchangeBytes,
                 allocator: ByteBufferAllocator(),
-                expectedKeySizes: wideKeySizes
+                expectedKeySizes: wideKeySizes,
+                negotiatedHostKeyAlgorithm: serverHostKey.hostKeyAlgorithms[0]
             )
         )
 

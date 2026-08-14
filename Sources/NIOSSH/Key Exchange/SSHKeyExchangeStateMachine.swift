@@ -257,7 +257,8 @@ struct SSHKeyExchangeStateMachine {
                     serverHostKey: negotiated.negotiatedHostKey(configuration.hostKeys),
                     initialExchangeBytes: &self.initialExchangeBytes,
                     allocator: self.allocator,
-                    expectedKeySizes: negotiated.negotiatedProtection.keySizes
+                    expectedKeySizes: negotiated.negotiatedProtection.keySizes,
+                    negotiatedHostKeyAlgorithm: negotiated.negotiatedHostKeyAlgorithm
                 )
 
                 let message = SSHMessage.keyExchangeReply(reply)
@@ -289,7 +290,9 @@ struct SSHKeyExchangeStateMachine {
         case .keyExchangeInitSent(exchange: var exchanger, let negotiated):
             switch self.role {
             case .client:
-                guard message.hostKey.keyPrefix.elementsEqual(negotiated.negotiatedHostKeyAlgorithm.utf8) else {
+                // RFC 8332: an `ssh-rsa` key may be negotiated under any of three algorithm names, so this
+                // asks whether the key can sign with the negotiated name rather than comparing key types.
+                guard message.hostKey.acceptsSignatureAlgorithm(negotiated.negotiatedHostKeyAlgorithm.utf8) else {
                     throw NIOSSHError.invalidHostKeyForKeyExchange(
                         expected: negotiated.negotiatedHostKeyAlgorithm,
                         got: message.hostKey.keyPrefix
@@ -300,7 +303,8 @@ struct SSHKeyExchangeStateMachine {
                     serverKeyExchangeMessage: message,
                     initialExchangeBytes: &self.initialExchangeBytes,
                     allocator: self.allocator,
-                    expectedKeySizes: negotiated.negotiatedProtection.keySizes
+                    expectedKeySizes: negotiated.negotiatedProtection.keySizes,
+                    negotiatedHostKeyAlgorithm: negotiated.negotiatedHostKeyAlgorithm
                 )
 
                 self.state = .keysExchanged(
@@ -657,9 +661,15 @@ extension SSHKeyExchangeStateMachine {
         $0.keyExchangeAlgorithmNames
     }
 
-    /// All known host key algorithms.
+    /// All known host key algorithms, in descending order of preference.
+    ///
+    /// `ssh-rsa` (SHA-1) is advertised, deliberately last. Negotiation walks the client's list and takes the
+    /// first entry the server also supports, so SHA-1 is chosen only against a server that offers nothing
+    /// better — which is the whole point: it is the only host key algorithm some older Dropbear and OpenSSH
+    /// ≤ 8.7 deployments have.
     static let supportedServerHostKeyAlgorithms: [Substring] = [
         "ssh-ed25519", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp521",
+        "rsa-sha2-512", "rsa-sha2-256", "ssh-rsa",
     ]
 }
 
