@@ -261,16 +261,30 @@ extension SSHMessage.UserAuthRequestMessage {
         switch request.offer {
         case .privateKey(let privateKeyRequest):
             // The algorithm name is resolved once and used for both the signed payload and the signature
-            // itself, because the server checks that they agree.
-            let algorithmName = privateKeyRequest.signatureAlgorithm
+            // itself, because the server checks that they agree. The `nil` default has to be resolved here
+            // rather than inside `sign(_:algorithm:)`: an RSA key left at `nil` signs with its preferred
+            // rsa-sha2-512 while its key prefix stays ssh-rsa, so deferring the default would sign a
+            // payload naming a different algorithm than the one on the wire.
+            let signatureAlgorithm =
+                privateKeyRequest.signatureAlgorithm
+                ?? privateKeyRequest.privateKey.signatureAlgorithms[0]
+            // Mirrors `offeredAlgorithmName(for:)`: a certified key is offered under its certificate
+            // prefix, never under the algorithm its base key signs with.
+            let offeredName =
+                privateKeyRequest.publicKey.acceptsSignatureAlgorithm(signatureAlgorithm.utf8)
+                ? signatureAlgorithm.utf8
+                : privateKeyRequest.publicKey.keyPrefix
             let dataToSign = UserAuthSignablePayload(
                 sessionIdentifier: sessionID,
                 userName: self.username,
                 serviceName: self.service,
                 publicKey: privateKeyRequest.publicKey,
-                algorithmName: algorithmName?.utf8 ?? privateKeyRequest.publicKey.keyPrefix
+                algorithmName: offeredName
             )
-            let signature = try privateKeyRequest.privateKey.sign(dataToSign, algorithm: algorithmName?[...])
+            let signature = try privateKeyRequest.privateKey.sign(
+                dataToSign,
+                algorithm: signatureAlgorithm[...]
+            )
             self.method = .publicKey(.known(key: privateKeyRequest.publicKey, signature: signature))
         case .password(let passwordRequest):
             self.method = .password(passwordRequest.password)
