@@ -258,3 +258,53 @@ class TestTransportProtection: NIOSSHTransportProtection {
         precondition(tagLength == self.macBytes, "Unexpected short tag")
     }
 }
+
+/// A transport protection scheme that records the sequence numbers it is handed for length decryption.
+///
+/// It implements `decryptFirstBlock(_:sequenceNumber:)` directly rather than inheriting the protocol
+/// extension's default, so it only sees a sequence number if the caller actually uses the new overload. All
+/// the real work is delegated to a `TestTransportProtection`, which implements only the old method — proving
+/// both sides of the seam at once.
+final class SequenceNumberRecordingTransportProtection: NIOSSHTransportProtection {
+    /// The sequence numbers passed to `decryptFirstBlock(_:sequenceNumber:)`, in order.
+    private(set) var recordedSequenceNumbers: [UInt32] = []
+
+    /// How many times the sequence-number-free overload was called directly. Must stay zero.
+    private(set) var legacyCallCount = 0
+
+    private let inner: TestTransportProtection
+
+    static var cipherName: String { TestTransportProtection.cipherName }
+    static var macName: String? { TestTransportProtection.macName }
+    static var cipherBlockSize: Int { TestTransportProtection.cipherBlockSize }
+    static var keySizes: ExpectedKeySizes { TestTransportProtection.keySizes }
+
+    var macBytes: Int { self.inner.macBytes }
+    var lengthEncrypted: Bool { self.inner.lengthEncrypted }
+
+    init(initialKeys: NIOSSHSessionKeys) throws {
+        self.inner = TestTransportProtection(initialKeys: initialKeys)
+    }
+
+    func updateKeys(_ newKeys: NIOSSHSessionKeys) throws {
+        try self.inner.updateKeys(newKeys)
+    }
+
+    func decryptFirstBlock(_ source: inout ByteBuffer) throws {
+        self.legacyCallCount += 1
+        try self.inner.decryptFirstBlock(&source)
+    }
+
+    func decryptFirstBlock(_ source: inout ByteBuffer, sequenceNumber: UInt32) throws {
+        self.recordedSequenceNumbers.append(sequenceNumber)
+        try self.inner.decryptFirstBlock(&source)
+    }
+
+    func decryptAndVerifyRemainingPacket(_ source: inout ByteBuffer, sequenceNumber: UInt32) throws -> ByteBuffer {
+        try self.inner.decryptAndVerifyRemainingPacket(&source, sequenceNumber: sequenceNumber)
+    }
+
+    func encryptPacket(_ destination: inout ByteBuffer, sequenceNumber: UInt32) throws {
+        try self.inner.encryptPacket(&destination, sequenceNumber: sequenceNumber)
+    }
+}

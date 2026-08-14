@@ -18,8 +18,9 @@ somewhere useful. Nothing is rebased once pushed.
 `SSHKeyExchangeStateMachine` built its KEXINIT MAC list with `protectionSchemes.compactMap { $0.macName }`,
 which emits one entry per scheme. Upstream ships only two schemes and both report `nil`, so the list is
 always empty and hits the `["hmac-sha2-256"]` fallback — the bug is unreachable there. AgenTTY registers
-several AES-CTR schemes that share two MAC names, at which point the same code advertises each name once
-per scheme. The fix is an order-preserving dedupe; the `isEmpty` fallback is untouched.
+two AES-CTR schemes that both name `hmac-sha2-256`, at which point the same code puts
+`hmac-sha2-256,hmac-sha2-256` on the wire. The fix is an order-preserving dedupe; the `isEmpty` fallback is
+untouched.
 
 Not upstream because upstream cannot reach the broken path.
 
@@ -118,6 +119,31 @@ hash with it; the client requires the server's signature to actually carry it. W
 server could negotiate `rsa-sha2-512` and return a SHA-1 signature that verifies perfectly well against
 the same key, and we would accept the downgrade.
 
+### 8. Give length decryption the packet sequence number
+
+`chacha20-poly1305@openssh.com` encrypts the packet length under a separate key with the sequence number as
+the nonce — so a scheme literally cannot decrypt the length field without knowing it. Upstream's
+`decryptAndVerifyRemainingPacket` and `encryptPacket` both receive the sequence number; `decryptFirstBlock`
+does not, and `SSHPacketParser.sequenceNumber` is internal, so there is no way to get it from outside the
+package.
+
+This adds a *new* protocol requirement `decryptFirstBlock(_:sequenceNumber:)` with a default implementation
+that forwards to the existing `decryptFirstBlock(_:)`. Existing conformers — in this package and outside it
+— compile and behave unchanged; only a scheme that needs the number implements the new method. The shape
+mirrors OpenSSH's own `chachapoly_get_length(ctx, plenp, seqnr, cp, len)`.
+
+The number matters specifically because it is *not* zero at that point: the parser's counter runs
+continuously across the cleartext-to-encrypted transition, so the first packet after NEWKEYS carries
+whatever number the preceding cleartext packets left it on.
+
+**The outbound side needs nothing.** `SSHPacketSerializer.serialize` already calls
+`encryptPacket(_:sequenceNumber:)` with `self.sequenceNumber`, and increments that counter in both the
+`.cleartext` and `.encrypted` states, so outbound encryption already sees the correct continuous number for
+its first post-NEWKEYS packet. Outbound encryption is a single call with no length/body split, so there is
+no second entry point to plumb.
+
+Not upstream because upstream ships no cipher that encrypts the length field independently.
+
 ## Deliberate divergences
 
 **`ssh-rsa` (SHA-1) is advertised.** Last, always. Negotiation walks the *client's* preference list and
@@ -160,5 +186,6 @@ RSA base keys explicitly rather than trapping later.
 ## Upstream audit obligation
 
 On each upstream `swift-nio-ssh` release, re-check whether RSA support has landed upstream and whether any
-of these seven commits can be dropped. Commits 1, 2, and 3 are the most likely candidates for upstreaming
-on their own merits; 4–7 exist only because upstream has made a deliberate choice not to ship RSA.
+of these eight commits can be dropped. Commits 1, 2, 3, and 8 are the most likely candidates for
+upstreaming on their own merits; 4–7 exist only because upstream has made a deliberate choice not to ship
+RSA.
