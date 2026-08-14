@@ -1,0 +1,27 @@
+name: CI
+
+permissions:
+    contents: read
+
+on:
+    push:
+        branches: [main, agentty-nio-ssh]
+    pull_request:
+        types: [opened, reopened, synchronize]
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    macos:
+        name: Build and test (macOS)
+        runs-on: macos-latest
+        steps:
+            - uses: actions/checkout@v5
+            - name: Swift version
+              run: swift --version
+            - name: Build
+              run: swift build --build-tests
+            - name: Test
+              run: swift test
