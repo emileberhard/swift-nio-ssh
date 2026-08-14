@@ -392,6 +392,115 @@ final class KeyExchangeTests: XCTestCase {
             XCTAssertEqual((error as? NIOSSHError).map { $0.type }, .invalidExchangeHashSignature)
         }
     }
+
+    /// Fixed inputs for the RFC 4253 § 7.2 expansion tests. The 64 leading bytes stand in for `K || H`, which the
+    /// base hasher has already absorbed by the time the expansion runs.
+    private static let keyExpansionPrefix = Array(UInt8(0)...UInt8(63))
+    private static let keyExpansionSessionID = ByteBuffer(bytes: Array(repeating: UInt8(0xAB), count: 32))
+
+    private static func keyExpansionBaseHasher() -> SHA256 {
+        var hasher = SHA256()
+        hasher.update(data: Self.keyExpansionPrefix)
+        return hasher
+    }
+
+    func testKeyExpansionBeyondTheDigestLength() {
+        // Known-answer vector, reproducible with:
+        //
+        //     python3 -c "
+        //     import hashlib
+        //     prefix = bytes(range(64)); sid = b'\xab' * 32
+        //     k1 = hashlib.sha256(prefix + b'C' + sid).digest()
+        //     k2 = hashlib.sha256(prefix + k1).digest()
+        //     print((k1 + k2).hex())"
+        let expected =
+            "160e60ad39ed1ed41ab5032bf40c266f2149ea49ccb6d83158d7a7a81a76bbe2"
+            + "030c757ba789cf718e49f6a66ddee1b054de8b2b83a8a3174f41869064d82e56"
+
+        let material = sshExpandKeyMaterial(
+            baseHasher: Self.keyExpansionBaseHasher(),
+            discriminatorByte: UInt8(ascii: "C"),
+            sessionID: Self.keyExpansionSessionID,
+            expectedKeySize: 64
+        )
+
+        XCTAssertEqual(material.count, 64)
+        XCTAssertEqual(material.map { String(format: "%02x", $0) }.joined(), expected)
+
+        // Independently recompute the vector straight from RFC 4253 § 7.2, without reusing the incremental hasher.
+        let firstBlock = Array(
+            SHA256.hash(
+                data: Self.keyExpansionPrefix + [UInt8(ascii: "C")]
+                    + Array(Self.keyExpansionSessionID.readableBytesView)
+            )
+        )
+        let secondBlock = Array(SHA256.hash(data: Self.keyExpansionPrefix + firstBlock))
+        XCTAssertEqual(material, firstBlock + secondBlock)
+    }
+
+    func testKeyExpansionUpToTheDigestLengthIsATruncatedFirstBlock() {
+        // This is the regression proof for the existing AES-GCM key sizes: nothing about them may change.
+        let firstBlock = Array(
+            SHA256.hash(
+                data: Self.keyExpansionPrefix + [UInt8(ascii: "A")]
+                    + Array(Self.keyExpansionSessionID.readableBytesView)
+            )
+        )
+
+        for size in [0, 1, 12, 16, 31, 32] {
+            let material = sshExpandKeyMaterial(
+                baseHasher: Self.keyExpansionBaseHasher(),
+                discriminatorByte: UInt8(ascii: "A"),
+                sessionID: Self.keyExpansionSessionID,
+                expectedKeySize: size
+            )
+            XCTAssertEqual(material, Array(firstBlock.prefix(size)), "wrong material for size \(size)")
+        }
+    }
+
+    func testKeyExchangeWithKeysLongerThanTheDigest() throws {
+        // curve25519-sha256 hashes to 32 bytes, so a 64 byte cipher key requires the § 7.2 expansion.
+        let wideKeySizes = ExpectedKeySizes(ivSize: 8, encryptionKeySize: 64, macKeySize: 16)
+
+        var server = EllipticCurveKeyExchange<Curve25519.KeyAgreement.PrivateKey>(
+            ourRole: .server([.init(ed25519Key: .init())]),
+            previousSessionIdentifier: nil
+        )
+        var client = EllipticCurveKeyExchange<Curve25519.KeyAgreement.PrivateKey>(
+            ourRole: .client,
+            previousSessionIdentifier: nil
+        )
+        let serverHostKey = NIOSSHPrivateKey(ed25519Key: .init())
+
+        var initialExchangeBytes = ByteBufferAllocator().buffer(capacity: 1024)
+
+        let clientMessage = client.initiateKeyExchangeClientSide(allocator: ByteBufferAllocator())
+        let (serverKeys, serverResponse) = try assertNoThrowWithValue(
+            try server.completeKeyExchangeServerSide(
+                clientKeyExchangeMessage: clientMessage,
+                serverHostKey: serverHostKey,
+                initialExchangeBytes: &initialExchangeBytes,
+                allocator: ByteBufferAllocator(),
+                expectedKeySizes: wideKeySizes
+            )
+        )
+
+        initialExchangeBytes.clear()
+
+        let clientKeys = try assertNoThrowWithValue(
+            try client.receiveServerKeyExchangePayload(
+                serverKeyExchangeMessage: serverResponse,
+                initialExchangeBytes: &initialExchangeBytes,
+                allocator: ByteBufferAllocator(),
+                expectedKeySizes: wideKeySizes
+            )
+        )
+
+        self.keyExchangeAgreed(serverKeys, clientKeys)
+        XCTAssertEqual(clientKeys.keys.inboundEncryptionKey.bitCount, 64 * 8)
+        XCTAssertEqual(clientKeys.keys.outboundEncryptionKey.bitCount, 64 * 8)
+        XCTAssertEqual(clientKeys.keys.initialInboundIV.count, 8)
+    }
 }
 
 /// This helper extension persists the old way of initializing config for this file.
