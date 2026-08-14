@@ -1118,6 +1118,34 @@ final class UserAuthenticationStateMachineTests: XCTestCase {
         }
     }
 
+    func testDefaultedRSAOfferSignsThePayloadItSends() throws {
+        // An offer with `signatureAlgorithm: nil` signs with the key's preferred algorithm (rsa-sha2-512),
+        // so the payload has to name that algorithm too — not the ssh-rsa key prefix. A live sshd rejects
+        // the mismatch with "incorrect signature"; this is the in-process regression for it.
+        let clientKey = try NIOSSHPrivateKey(rsaKey: _RSA.Signing.PrivateKey(keySize: .bits2048))
+
+        var stateMachine = UserAuthenticationStateMachine(
+            role: .server(.init(hostKeys: [self.hostKey], userAuthDelegate: DenyThenAcceptDelegate(messagesToDeny: 0))),
+            loop: self.loop,
+            sessionID: self.sessionID
+        )
+
+        let serviceAccept = SSHMessage.ServiceAcceptMessage(service: "ssh-userauth")
+        XCTAssertNoThrow(
+            try self.serviceRequested(service: "ssh-userauth", nextMessage: serviceAccept, stateMachine: &stateMachine)
+        )
+        stateMachine.sendServiceAccept(serviceAccept)
+
+        let offer = NIOSSHUserAuthenticationOffer(
+            username: "foo",
+            serviceName: "ssh-connection",
+            offer: .privateKey(.init(privateKey: clientKey))
+        )
+        let request = try SSHMessage.UserAuthRequestMessage(request: offer, sessionID: self.sessionID)
+        try self.expectAuthRequestToSucceedSynchronously(request: request, stateMachine: &stateMachine)
+        stateMachine.sendUserAuthSuccess()
+    }
+
     func testServerRejectsARelabelledRSASignature() throws {
         // Relabelling a SHA-512 signature as SHA-256 must fail: the flavor selects the verification hash *and*
         // is part of the signed payload, so a downgrade cannot be forged by editing the name.

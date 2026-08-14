@@ -144,6 +144,22 @@ no second entry point to plumb.
 
 Not upstream because upstream ships no cipher that encrypts the length field independently.
 
+### 9. Sign the algorithm name the offer actually sends
+
+`SSHMessage.UserAuthRequestMessage.init(request:sessionID:)` built the signed payload with the public key's
+prefix when the offer's `signatureAlgorithm` was `nil`, while `sign(_:algorithm:)` resolved that same `nil`
+to the key's *preferred* algorithm — which is also the name that goes on the wire. For RSA those differ
+(`ssh-rsa` vs `rsa-sha2-512`), so a defaulted RSA offer produced a signature a real server rejects with
+"incorrect signature". Reproduced three ways against OpenSSH 10.2p1 (nil RSA fails, explicit RSA verifies,
+nil Ed25519 verifies) before the fix.
+
+The fix resolves the algorithm once — defaulting to `signatureAlgorithms[0]` — and uses that single value
+for both the payload and the signature, keeping the certified-key exception (offered under the certificate
+prefix) exactly as `offeredAlgorithmName(for:)` defines it. Every explicit-algorithm path is byte-identical
+to before; only the previously-broken defaulted RSA path changes.
+
+Not upstream because upstream has no RSA keys, so upstream's `nil` path cannot diverge.
+
 ## Deliberate divergences
 
 **`ssh-rsa` (SHA-1) is advertised.** Last, always. Negotiation walks the *client's* preference list and
