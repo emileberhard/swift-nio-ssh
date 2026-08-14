@@ -16,6 +16,7 @@
 import Foundation
 import NIOCore
 import NIOFoundationCompat
+import _CryptoExtras
 
 /// A representation of an SSH signature.
 ///
@@ -26,6 +27,102 @@ public struct NIOSSHSignature: Hashable, Sendable {
 
     internal init(backingSignature: BackingSignature) {
         self.backingSignature = backingSignature
+    }
+
+    /// The name of the algorithm that produced this signature, as it appears on the wire.
+    ///
+    /// For every key type but RSA this is the same as the key type. RSA keys sign with one of three algorithms
+    /// (RFC 8332), so the choice has to travel with the signature: it is what the writer emits as the algorithm
+    /// name and what the verifier uses to pick a hash.
+    internal var signatureAlgorithmName: String.UTF8View {
+        switch self.backingSignature {
+        case .ed25519:
+            return Self.ed25519SignaturePrefix
+        case .ecdsaP256:
+            return Self.ecdsaP256SignaturePrefix
+        case .ecdsaP384:
+            return Self.ecdsaP384SignaturePrefix
+        case .ecdsaP521:
+            return Self.ecdsaP521SignaturePrefix
+        case .rsa(let flavor, _):
+            return flavor.wireName
+        }
+    }
+}
+
+/// The signature algorithms that can be used with an `ssh-rsa` key, in order of preference.
+///
+/// RFC 8332 decoupled the RSA key type from the signature algorithm: `ssh-rsa` remains the key type, but a
+/// signature over it may use SHA-1, SHA-256, or SHA-512.
+internal enum RSASignatureFlavor: Sendable, Hashable, CaseIterable {
+    /// RSASSA-PKCS1-v1_5 over SHA-512, i.e. `rsa-sha2-512`.
+    case sha512
+
+    /// RSASSA-PKCS1-v1_5 over SHA-256, i.e. `rsa-sha2-256`.
+    case sha256
+
+    /// RSASSA-PKCS1-v1_5 over SHA-1, i.e. plain `ssh-rsa`. Deprecated, but the only option on servers that
+    /// predate RFC 8332.
+    case sha1
+
+    internal var wireName: String.UTF8View {
+        switch self {
+        case .sha512:
+            return "rsa-sha2-512".utf8
+        case .sha256:
+            return "rsa-sha2-256".utf8
+        case .sha1:
+            return "ssh-rsa".utf8
+        }
+    }
+
+    internal init?<Bytes: Collection>(wireName: Bytes) where Bytes.Element == UInt8 {
+        guard let flavor = Self.allCases.first(where: { wireName.elementsEqual($0.wireName) }) else {
+            return nil
+        }
+        self = flavor
+    }
+}
+
+extension RSASignatureFlavor {
+    /// Signs `message` with this flavor's hash.
+    ///
+    /// SSH signs the exchange hash, or the user auth signable payload, as the *message*, and RSASSA-PKCS1-v1_5
+    /// hashes its input, so the message is hashed here rather than passed through.
+    ///
+    /// Only SHA-1, SHA-256 and SHA-512 are used: `_RSA` traps on a digest type it does not recognise, so an
+    /// arbitrary `Digest` must never be handed to it.
+    internal func signature(
+        for message: some DataProtocol,
+        with key: _RSA.Signing.PrivateKey
+    ) throws -> _RSA.Signing.RSASignature {
+        switch self {
+        case .sha512:
+            return try key.signature(for: SHA512.hash(data: message), padding: .insecurePKCS1v1_5)
+        case .sha256:
+            return try key.signature(for: SHA256.hash(data: message), padding: .insecurePKCS1v1_5)
+        case .sha1:
+            return try key.signature(for: Insecure.SHA1.hash(data: message), padding: .insecurePKCS1v1_5)
+        }
+    }
+
+    internal func isValidSignature(
+        _ signature: _RSA.Signing.RSASignature,
+        for message: some DataProtocol,
+        with key: _RSA.Signing.PublicKey
+    ) -> Bool {
+        switch self {
+        case .sha512:
+            return key.isValidSignature(signature, for: SHA512.hash(data: message), padding: .insecurePKCS1v1_5)
+        case .sha256:
+            return key.isValidSignature(signature, for: SHA256.hash(data: message), padding: .insecurePKCS1v1_5)
+        case .sha1:
+            return key.isValidSignature(
+                signature,
+                for: Insecure.SHA1.hash(data: message),
+                padding: .insecurePKCS1v1_5
+            )
+        }
     }
 }
 
@@ -41,6 +138,8 @@ extension NIOSSHSignature {
         case ecdsaP384(P384.Signing.ECDSASignature)
 
         case ecdsaP521(P521.Signing.ECDSASignature)
+
+        case rsa(flavor: RSASignatureFlavor, signature: _RSA.Signing.RSASignature)
 
         internal enum RawBytes {
             case byteBuffer(ByteBuffer)
@@ -93,10 +192,13 @@ extension NIOSSHSignature.BackingSignature: Equatable {
             return lhs.rawRepresentation == rhs.rawRepresentation
         case (.ecdsaP521(let lhs), .ecdsaP521(let rhs)):
             return lhs.rawRepresentation == rhs.rawRepresentation
+        case (.rsa(let lhsFlavor, let lhsSig), .rsa(let rhsFlavor, let rhsSig)):
+            return lhsFlavor == rhsFlavor && lhsSig.rawRepresentation == rhsSig.rawRepresentation
         case (.ed25519, _),
             (.ecdsaP256, _),
             (.ecdsaP384, _),
-            (.ecdsaP521, _):
+            (.ecdsaP521, _),
+            (.rsa, _):
             return false
         }
     }
@@ -117,6 +219,10 @@ extension NIOSSHSignature.BackingSignature: Hashable {
         case .ecdsaP521(let sig):
             hasher.combine(3)
             hasher.combine(sig.rawRepresentation)
+        case .rsa(let flavor, let sig):
+            hasher.combine(4)
+            hasher.combine(flavor)
+            hasher.combine(sig.rawRepresentation)
         }
     }
 }
@@ -134,7 +240,20 @@ extension ByteBuffer {
             return self.writeECDSAP384Signature(baseSignature: sig)
         case .ecdsaP521(let sig):
             return self.writeECDSAP521Signature(baseSignature: sig)
+        case .rsa(let flavor, let sig):
+            return self.writeRSASignature(flavor: flavor, baseSignature: sig)
         }
+    }
+
+    private mutating func writeRSASignature(
+        flavor: RSASignatureFlavor,
+        baseSignature: _RSA.Signing.RSASignature
+    ) -> Int {
+        // RFC 4253 § 6.6 and RFC 8332 § 3: the algorithm name, then the raw signature as an SSH string.
+        // `RSA_sign` emits exactly `RSA_size` bytes, already left-padded, so there is no mpint encoding here.
+        var writtenLength = self.writeSSHString(flavor.wireName)
+        writtenLength += self.writeSSHString(baseSignature.rawRepresentation)
+        return writtenLength
     }
 
     private mutating func writeEd25519Signature(signatureBytes: NIOSSHSignature.BackingSignature.RawBytes) -> Int {
@@ -229,6 +348,8 @@ extension ByteBuffer {
                 return try buffer.readECDSAP384Signature()
             } else if bytesView.elementsEqual(NIOSSHSignature.ecdsaP521SignaturePrefix) {
                 return try buffer.readECDSAP521Signature()
+            } else if let flavor = RSASignatureFlavor(wireName: bytesView) {
+                return try buffer.readRSASignature(flavor: flavor)
             } else {
                 // We don't know this signature type.
                 let signature =
@@ -250,6 +371,26 @@ extension ByteBuffer {
         }
 
         return NIOSSHSignature(backingSignature: .ed25519(.byteBuffer(sigBytes)))
+    }
+
+    /// A helper function that reads an RSA signature.
+    ///
+    /// Not safe to call from arbitrary code as this does not return the reader index on failure: it relies on the caller performing
+    /// the rewind.
+    private mutating func readRSASignature(flavor: RSASignatureFlavor) throws -> NIOSSHSignature? {
+        // For RSA the signature is a plain SSH string of exactly `RSA_size` bytes: no mpint encoding.
+        guard let sigBytes = self.readSSHString() else {
+            return nil
+        }
+
+        // A signature is as wide as the modulus, and we accept moduli up to 16384 bits, so anything longer is
+        // junk. Bound it here so a hostile peer cannot make us allocate on their say-so.
+        guard sigBytes.readableBytes > 0, sigBytes.readableBytes <= 2048 else {
+            throw NIOSSHError.invalidSSHMessage(reason: "invalid RSA signature length")
+        }
+
+        let signature = _RSA.Signing.RSASignature(rawRepresentation: sigBytes.readableBytesView)
+        return NIOSSHSignature(backingSignature: .rsa(flavor: flavor, signature: signature))
     }
 
     /// A helper function that reads an ECDSA P-256 signature.

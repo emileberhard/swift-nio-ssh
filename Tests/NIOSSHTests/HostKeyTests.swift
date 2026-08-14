@@ -16,10 +16,15 @@ import Crypto
 import NIOCore
 import NIOFoundationCompat
 import XCTest
+import _CryptoExtras
 
 @testable import NIOSSH
 
 final class HostKeyTests: XCTestCase {
+    /// A single 2048-bit RSA key shared by the RSA tests: generating one costs real time, and none of these
+    /// tests depend on the key being fresh.
+    private static let sharedRSAKey = try! _RSA.Signing.PrivateKey(keySize: .bits2048)
+
     func testBasicEd25519SigningFlow() throws {
         let edKey = Curve25519.Signing.PrivateKey()
         let sshKey = NIOSSHPrivateKey(ed25519Key: edKey)
@@ -90,6 +95,151 @@ final class HostKeyTests: XCTestCase {
 
         let newSignature = try assertNoThrowWithValue(buffer.readSSHSignature()!)
         XCTAssertNoThrow(XCTAssertTrue(sshKey.publicKey.isValidSignature(newSignature, for: digest)))
+    }
+
+    private func assertRSASigningFlow(algorithm: Substring?, expectedWireName: String) throws {
+        let sshKey = try assertNoThrowWithValue(NIOSSHPrivateKey(rsaKey: Self.sharedRSAKey))
+
+        let digest = SHA256.hash(data: Array("hello, world!".utf8))
+        let signature = try assertNoThrowWithValue(sshKey.sign(digest: digest, algorithm: algorithm))
+        XCTAssertEqual(String(signature.signatureAlgorithmName), expectedWireName)
+
+        // Naturally, this should verify.
+        XCTAssertTrue(sshKey.publicKey.isValidSignature(signature, for: digest))
+
+        // Now let's try round-tripping through bytebuffer.
+        var buffer = ByteBufferAllocator().buffer(capacity: 1024)
+        buffer.writeSSHSignature(signature)
+
+        // The wire form is `string algorithm-name` then `string signature-blob`, and the blob is exactly as
+        // wide as the modulus: no mpint padding.
+        var wireCopy = buffer
+        XCTAssertEqual(wireCopy.readSSHString().map { String(buffer: $0) }, expectedWireName)
+        XCTAssertEqual(wireCopy.readSSHString()?.readableBytes, 256)
+        XCTAssertEqual(wireCopy.readableBytes, 0)
+
+        let newSignature = try assertNoThrowWithValue(buffer.readSSHSignature()!)
+        XCTAssertEqual(newSignature, signature)
+        XCTAssertTrue(sshKey.publicKey.isValidSignature(newSignature, for: digest))
+    }
+
+    func testBasicRSASigningFlowSHA512() throws {
+        // No algorithm means the key's preferred algorithm, which is the strongest one.
+        try self.assertRSASigningFlow(algorithm: nil, expectedWireName: "rsa-sha2-512")
+        try self.assertRSASigningFlow(algorithm: "rsa-sha2-512", expectedWireName: "rsa-sha2-512")
+    }
+
+    func testBasicRSASigningFlowSHA256() throws {
+        try self.assertRSASigningFlow(algorithm: "rsa-sha2-256", expectedWireName: "rsa-sha2-256")
+    }
+
+    func testBasicRSASigningFlowSHA1() throws {
+        try self.assertRSASigningFlow(algorithm: "ssh-rsa", expectedWireName: "ssh-rsa")
+    }
+
+    func testRSASigningFlowOverUserAuthPayload() throws {
+        let sshKey = try assertNoThrowWithValue(NIOSSHPrivateKey(rsaKey: Self.sharedRSAKey))
+        var sessionIdentifier = ByteBufferAllocator().buffer(capacity: 32)
+        sessionIdentifier.writeString("hello, world!")
+        let payload = UserAuthSignablePayload(
+            sessionIdentifier: sessionIdentifier,
+            userName: "user",
+            serviceName: "ssh-connection",
+            publicKey: sshKey.publicKey
+        )
+
+        for algorithm in sshKey.signatureAlgorithms {
+            let signature = try assertNoThrowWithValue(sshKey.sign(payload, algorithm: algorithm[...]))
+            XCTAssertEqual(String(signature.signatureAlgorithmName), algorithm)
+            XCTAssertTrue(sshKey.publicKey.isValidSignature(signature, for: payload))
+        }
+    }
+
+    func testRSAFailsVerificationWithDifferentKeys() throws {
+        let sshKey = try assertNoThrowWithValue(NIOSSHPrivateKey(rsaKey: Self.sharedRSAKey))
+        let otherSSHKey = try assertNoThrowWithValue(
+            NIOSSHPrivateKey(rsaKey: _RSA.Signing.PrivateKey(keySize: .bits2048))
+        )
+
+        let digest = SHA256.hash(data: Array("hello, world!".utf8))
+        let signature = try assertNoThrowWithValue(sshKey.sign(digest: digest))
+
+        XCTAssertFalse(otherSSHKey.publicKey.isValidSignature(signature, for: digest))
+
+        var buffer = ByteBufferAllocator().buffer(capacity: 1024)
+        buffer.writeSSHSignature(signature)
+
+        let newSignature = try assertNoThrowWithValue(buffer.readSSHSignature()!)
+        XCTAssertFalse(otherSSHKey.publicKey.isValidSignature(newSignature, for: digest))
+    }
+
+    func testRSASignatureFlavorMismatchFailsVerification() throws {
+        // The flavor travels with the signature, and it is what selects the verification hash. Claiming a
+        // different flavor for the same bytes must not verify: otherwise a peer could downgrade us to SHA-1
+        // just by relabelling.
+        let sshKey = try assertNoThrowWithValue(NIOSSHPrivateKey(rsaKey: Self.sharedRSAKey))
+
+        let digest = SHA256.hash(data: Array("hello, world!".utf8))
+        let signature = try assertNoThrowWithValue(sshKey.sign(digest: digest, algorithm: "rsa-sha2-512"))
+
+        guard case .rsa(_, let rawSignature) = signature.backingSignature else {
+            XCTFail("Expected an RSA signature")
+            return
+        }
+
+        for flavor in [RSASignatureFlavor.sha256, .sha1] {
+            let relabelled = NIOSSHSignature(backingSignature: .rsa(flavor: flavor, signature: rawSignature))
+            XCTAssertFalse(
+                sshKey.publicKey.isValidSignature(relabelled, for: digest),
+                "\(String(flavor.wireName)) must not verify a SHA-512 signature"
+            )
+        }
+    }
+
+    func testRSARejectsUnsupportedSignatureAlgorithm() throws {
+        let sshKey = try assertNoThrowWithValue(NIOSSHPrivateKey(rsaKey: Self.sharedRSAKey))
+        let digest = SHA256.hash(data: Array("hello, world!".utf8))
+
+        // `rsa-sha2-384` is not an SSH signature algorithm, and `_RSA` would trap on an unexpected digest, so
+        // this has to be rejected before it reaches the crypto layer.
+        XCTAssertThrowsError(try sshKey.sign(digest: digest, algorithm: "rsa-sha2-384")) { error in
+            XCTAssertEqual((error as? NIOSSHError)?.type, .unknownSignature)
+        }
+    }
+
+    func testNonRSAKeysRejectForeignSignatureAlgorithms() throws {
+        let sshKey = NIOSSHPrivateKey(ed25519Key: .init())
+        let digest = SHA256.hash(data: Array("hello, world!".utf8))
+
+        XCTAssertThrowsError(try sshKey.sign(digest: digest, algorithm: "rsa-sha2-512")) { error in
+            XCTAssertEqual((error as? NIOSSHError)?.type, .unknownSignature)
+        }
+        XCTAssertNoThrow(try sshKey.sign(digest: digest, algorithm: "ssh-ed25519"))
+    }
+
+    func testSignatureAlgorithmsMatchKeyType() throws {
+        XCTAssertEqual(
+            try NIOSSHPrivateKey(rsaKey: Self.sharedRSAKey).signatureAlgorithms,
+            ["rsa-sha2-512", "rsa-sha2-256", "ssh-rsa"]
+        )
+        XCTAssertEqual(NIOSSHPrivateKey(ed25519Key: .init()).signatureAlgorithms, ["ssh-ed25519"])
+        XCTAssertEqual(NIOSSHPrivateKey(p256Key: .init()).signatureAlgorithms, ["ecdsa-sha2-nistp256"])
+        XCTAssertEqual(NIOSSHPrivateKey(p384Key: .init()).signatureAlgorithms, ["ecdsa-sha2-nistp384"])
+        XCTAssertEqual(NIOSSHPrivateKey(p521Key: .init()).signatureAlgorithms, ["ecdsa-sha2-nistp521"])
+    }
+
+    func testRSAPublicKeyRoundTripsFromPrivateKey() throws {
+        let sshKey = try assertNoThrowWithValue(NIOSSHPrivateKey(rsaKey: Self.sharedRSAKey))
+
+        var buffer = ByteBufferAllocator().buffer(capacity: 1024)
+        buffer.writeSSHHostKey(sshKey.publicKey)
+
+        let recovered = try assertNoThrowWithValue(buffer.readSSHHostKey()!)
+        XCTAssertEqual(recovered, sshKey.publicKey)
+
+        let digest = SHA256.hash(data: Array("hello, world!".utf8))
+        let signature = try assertNoThrowWithValue(sshKey.sign(digest: digest))
+        XCTAssertTrue(recovered.isValidSignature(signature, for: digest))
     }
 
     func testEd25519FailsVerificationWithDifferentKeys() throws {
@@ -294,7 +444,8 @@ final class HostKeyTests: XCTestCase {
 
     func testUnrecognisedSignature() throws {
         var buffer = ByteBufferAllocator().buffer(capacity: 1024)
-        buffer.writeSSHString("ssh-rsa".utf8)
+        // `ssh-rsa` used to stand in here, but this fork supports it. DSA never will.
+        buffer.writeSSHString("ssh-dss".utf8)
 
         XCTAssertThrowsError(try buffer.readSSHSignature()) { error in
             XCTAssertEqual((error as? NIOSSHError).map { $0.type }, .unknownSignature)

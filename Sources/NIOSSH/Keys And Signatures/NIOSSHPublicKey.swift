@@ -98,6 +98,9 @@ extension NIOSSHPublicKey {
             return digest.withUnsafeBytes { digestPtr in
                 key.isValidSignature(sig, for: digestPtr)
             }
+        case (.rsa(let key), .rsa(let flavor, let sig)):
+            // RSASSA-PKCS1-v1_5 hashes its own input, so the message here is the exchange hash itself.
+            return flavor.isValidSignature(sig, for: Array(digest), with: key.key)
         case (.certified(let key), _):
             return key.isValidSignature(signature, for: digest)
         case (.ed25519, _),
@@ -105,7 +108,6 @@ extension NIOSSHPublicKey {
             (.ecdsaP384, _),
             (.ecdsaP521, _),
             (.rsa, _):
-            // RSA signature verification arrives with the RSA signature type.
             return false
         }
     }
@@ -122,6 +124,8 @@ extension NIOSSHPublicKey {
             return key.isValidSignature(sig, for: bytes.readableBytesView)
         case (.ecdsaP521(let key), .ecdsaP521(let sig)):
             return key.isValidSignature(sig, for: bytes.readableBytesView)
+        case (.rsa(let key), .rsa(let flavor, let sig)):
+            return flavor.isValidSignature(sig, for: Array(bytes.readableBytesView), with: key.key)
         case (.certified(let key), _):
             return key.isValidSignature(signature, for: bytes)
         case (.ed25519, _),
@@ -129,7 +133,6 @@ extension NIOSSHPublicKey {
             (.ecdsaP384, _),
             (.ecdsaP521, _),
             (.rsa, _):
-            // RSA signature verification arrives with the RSA signature type.
             return false
         }
     }
@@ -146,6 +149,8 @@ extension NIOSSHPublicKey {
             return key.isValidSignature(sig, for: payload.bytes.readableBytesView)
         case (.ecdsaP521(let key), .ecdsaP521(let sig)):
             return key.isValidSignature(sig, for: payload.bytes.readableBytesView)
+        case (.rsa(let key), .rsa(let flavor, let sig)):
+            return flavor.isValidSignature(sig, for: Array(payload.bytes.readableBytesView), with: key.key)
         case (.certified(let key), _):
             return key.isValidSignature(signature, for: payload)
         case (.ed25519, _),
@@ -153,7 +158,6 @@ extension NIOSSHPublicKey {
             (.ecdsaP384, _),
             (.ecdsaP521, _),
             (.rsa, _):
-            // RSA signature verification arrives with the RSA signature type.
             return false
         }
     }
@@ -190,9 +194,10 @@ extension NIOSSHPublicKey {
     internal static let rsaPublicKeyPrefix = "ssh-rsa".utf8
 
     /// The signature algorithm names that may be used with an `ssh-rsa` key, per RFC 8332 § 3.
-    internal static let rsaSignatureAlgorithms: [String.UTF8View] = [
-        "ssh-rsa".utf8, "rsa-sha2-256".utf8, "rsa-sha2-512".utf8,
-    ]
+    ///
+    /// Derived from ``RSASignatureFlavor`` so the set of names we advertise, accept, and can actually produce
+    /// cannot drift apart. The order is the flavor's own preference order: strongest hash first.
+    internal static let rsaSignatureAlgorithms: [String.UTF8View] = RSASignatureFlavor.allCases.map { $0.wireName }
 
     internal var keyPrefix: String.UTF8View {
         switch self.backingKey {
