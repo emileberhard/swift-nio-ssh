@@ -26,7 +26,67 @@ public struct NIOSSHError: Error {
     /// The type of this error, used to identify the kind of error that has been thrown.
     public var type: ErrorType
 
-    private var diagnostics: String?
+    /// A human-readable description of what went wrong, if one is available.
+    ///
+    /// This is diagnostic information only: do not parse it, and do not rely on its exact wording.
+    public private(set) var diagnostics: String?
+
+    /// Structured detail about the failure, present only when ``type`` is
+    /// ``NIOSSHError/ErrorType/keyExchangeNegotiationFailure``.
+    public private(set) var negotiationFailure: NegotiationFailure?
+
+    internal init(type: ErrorType, diagnostics: String?, negotiationFailure: NegotiationFailure? = nil) {
+        self.type = type
+        self.diagnostics = diagnostics
+        self.negotiationFailure = negotiationFailure
+    }
+}
+
+// MARK: - Structured key exchange negotiation diagnostics.
+
+extension NIOSSHError {
+    /// Detail about which part of the SSH algorithm negotiation could not be satisfied.
+    ///
+    /// Key exchange negotiates several independent things, and all of them surface as a single
+    /// ``NIOSSHError/ErrorType/keyExchangeNegotiationFailure``. This structure says which one failed and what each
+    /// peer offered, so a client can tell "no shared cipher" apart from "no shared host key algorithm".
+    public struct NegotiationFailure: Sendable, Hashable {
+        /// The part of the negotiation that could not be satisfied.
+        public enum Component: Sendable, Hashable {
+            /// No key exchange algorithm is supported by both peers, or the negotiated one has no implementation.
+            case keyExchange
+
+            /// No host key algorithm is supported by both peers.
+            case hostKey
+
+            /// No encryption algorithm is supported by both peers.
+            case encryption
+
+            /// No MAC algorithm is supported by both peers.
+            case mac
+
+            /// A cipher and MAC were agreed, but no registered transport protection scheme implements that pair.
+            case transportProtection
+
+            /// The two directions of the connection negotiated different ciphers or MACs, which is unsupported.
+            case asymmetricNegotiation
+        }
+
+        /// Which part of the negotiation failed.
+        public var component: Component
+
+        /// What this peer offered.
+        ///
+        /// For ``Component/asymmetricNegotiation`` this is instead the client-to-server result, and for
+        /// ``Component/transportProtection`` it is the locally registered `cipher/mac` pairs.
+        public var localAlgorithms: [String]
+
+        /// What the remote peer offered.
+        ///
+        /// For ``Component/asymmetricNegotiation`` this is instead the server-to-client result, and for
+        /// ``Component/transportProtection`` it is the agreed cipher and MAC.
+        public var remoteAlgorithms: [String]
+    }
 }
 
 // MARK: - Internal helper functions for error construction.
@@ -88,10 +148,18 @@ extension NIOSSHError {
         NIOSSHError(type: .protocolViolation, diagnostics: "Protocol \(protocolName) violated due to \(violation)")
     }
 
-    internal static let keyExchangeNegotiationFailure = NIOSSHError(
-        type: .keyExchangeNegotiationFailure,
-        diagnostics: nil
-    )
+    @inline(never)
+    internal static func keyExchangeNegotiationFailure(_ failure: NegotiationFailure) -> NIOSSHError {
+        NIOSSHError(
+            type: .keyExchangeNegotiationFailure,
+            diagnostics: """
+                no agreement on \(failure.component): \
+                local [\(failure.localAlgorithms.joined(separator: ", "))], \
+                remote [\(failure.remoteAlgorithms.joined(separator: ", "))]
+                """,
+            negotiationFailure: failure
+        )
+    }
 
     @inline(never)
     internal static func unsupportedVersion(_ version: String) -> NIOSSHError {

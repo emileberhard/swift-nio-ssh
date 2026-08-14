@@ -395,7 +395,13 @@ struct SSHKeyExchangeStateMachine {
 
         // We only support symmetrical negotiation results.
         guard clientEncryption == serverEncryption, clientMAC == serverMAC else {
-            throw NIOSSHError.keyExchangeNegotiationFailure
+            throw NIOSSHError.keyExchangeNegotiationFailure(
+                .init(
+                    component: .asymmetricNegotiation,
+                    localAlgorithms: [String(clientEncryption), String(clientMAC)],
+                    remoteAlgorithms: [String(serverEncryption), String(serverMAC)]
+                )
+            )
         }
 
         // Ok, now we need to find the right transport protection scheme. This can technically fail.
@@ -404,7 +410,13 @@ struct SSHKeyExchangeStateMachine {
                 $0.cipherName == clientEncryption && ($0.macName == nil || $0.macName! == clientMAC)
             })
         else {
-            throw NIOSSHError.keyExchangeNegotiationFailure
+            throw NIOSSHError.keyExchangeNegotiationFailure(
+                .init(
+                    component: .transportProtection,
+                    localAlgorithms: self.protectionSchemes.map { "\($0.cipherName)/\($0.macName ?? "any")" },
+                    remoteAlgorithms: [String(clientEncryption), String(clientMAC)]
+                )
+            )
         }
 
         // Great, we have a protection scheme. Build the negotiation result.
@@ -480,8 +492,30 @@ struct SSHKeyExchangeStateMachine {
             }
         }
 
-        // Completed the loop with usable protocols, we have to throw.
-        throw NIOSSHError.keyExchangeNegotiationFailure
+        // Completed the loop with usable protocols, we have to throw. The loop conflates two lists, so report
+        // whichever one actually has no overlap: if the key exchange lists intersect, the host keys are at fault.
+        let keyExchangeOverlaps = clientAlgorithms.contains { serverAlgorithms.contains($0) }
+        if keyExchangeOverlaps {
+            let lists = self.localAndRemote(client: clientHostKeyAlgorithms, server: serverHostKeyAlgorithms)
+            throw NIOSSHError.keyExchangeNegotiationFailure(
+                .init(component: .hostKey, localAlgorithms: lists.local, remoteAlgorithms: lists.remote)
+            )
+        }
+
+        let lists = self.localAndRemote(client: clientAlgorithms, server: serverAlgorithms)
+        throw NIOSSHError.keyExchangeNegotiationFailure(
+            .init(component: .keyExchange, localAlgorithms: lists.local, remoteAlgorithms: lists.remote)
+        )
+    }
+
+    /// Relabels a pair of client/server algorithm lists as local/remote for diagnostic purposes.
+    private func localAndRemote(client: [Substring], server: [Substring]) -> (local: [String], remote: [String]) {
+        switch self.role {
+        case .client:
+            return (client.map { String($0) }, server.map { String($0) })
+        case .server:
+            return (server.map { String($0) }, client.map { String($0) })
+        }
     }
 
     private func negotiatedTransportProtection(
@@ -511,12 +545,18 @@ struct SSHKeyExchangeStateMachine {
         // is in the server's list as well.
         guard let encryption = clientEncryptionAlgorithms.first(where: { serverEncryptionAlgorithms.contains($0) })
         else {
-            throw NIOSSHError.keyExchangeNegotiationFailure
+            let lists = self.localAndRemote(client: clientEncryptionAlgorithms, server: serverEncryptionAlgorithms)
+            throw NIOSSHError.keyExchangeNegotiationFailure(
+                .init(component: .encryption, localAlgorithms: lists.local, remoteAlgorithms: lists.remote)
+            )
         }
 
         // Ok great, now work out what we negotiated as a MAC.
         guard let mac = clientMACAlgorithms.first(where: { serverMACAlgorithms.contains($0) }) else {
-            throw NIOSSHError.keyExchangeNegotiationFailure
+            let lists = self.localAndRemote(client: clientMACAlgorithms, server: serverMACAlgorithms)
+            throw NIOSSHError.keyExchangeNegotiationFailure(
+                .init(component: .mac, localAlgorithms: lists.local, remoteAlgorithms: lists.remote)
+            )
         }
 
         return (encryption, mac)
@@ -547,7 +587,13 @@ struct SSHKeyExchangeStateMachine {
         }
 
         // Huh, we didn't find it. Weird error.
-        throw NIOSSHError.keyExchangeNegotiationFailure
+        throw NIOSSHError.keyExchangeNegotiationFailure(
+            .init(
+                component: .keyExchange,
+                localAlgorithms: Self.supportedKeyExchangeAlgorithms.map { String($0) },
+                remoteAlgorithms: [String(algorithm)]
+            )
+        )
     }
 
     private func expectingIncorrectGuess(_ kexMessage: SSHMessage.KeyExchangeMessage) -> Bool {

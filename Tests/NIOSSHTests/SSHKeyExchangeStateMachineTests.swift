@@ -693,6 +693,96 @@ final class SSHKeyExchangeStateMachineTests: XCTestCase {
         }
     }
 
+    func testNegotiationFailureReportsTheEncryptionComponent() throws {
+        // Client only supports AES 256, server only supports AES 128.
+        let allocator = ByteBufferAllocator()
+        let loop = EmbeddedEventLoop()
+
+        var client = SSHKeyExchangeStateMachine(
+            allocator: allocator,
+            loop: loop,
+            role: .client(
+                .init(userAuthDelegate: ExplodingAuthDelegate(), serverAuthDelegate: AcceptAllHostKeysDelegate())
+            ),
+            remoteVersion: Constants.version,
+            protectionSchemes: [AES256GCMOpenSSHTransportProtection.self],
+            previousSessionIdentifier: nil
+        )
+        let server = SSHKeyExchangeStateMachine(
+            allocator: allocator,
+            loop: loop,
+            role: .server(.init(hostKeys: [.init(ed25519Key: .init())], userAuthDelegate: DenyAllServerAuthDelegate())),
+            remoteVersion: Constants.version,
+            protectionSchemes: [AES128GCMOpenSSHTransportProtection.self],
+            previousSessionIdentifier: nil
+        )
+
+        let serverMessage = server.createKeyExchangeMessage()
+        client.send(keyExchange: client.createKeyExchangeMessage())
+
+        XCTAssertThrowsError(try client.handle(keyExchange: serverMessage)) { error in
+            let failure = (error as? NIOSSHError)?.negotiationFailure
+            XCTAssertEqual(failure?.component, .encryption)
+            XCTAssertEqual(failure?.localAlgorithms, ["aes256-gcm@openssh.com"])
+            XCTAssertEqual(failure?.remoteAlgorithms, ["aes128-gcm@openssh.com"])
+        }
+    }
+
+    func testNegotiationFailureReportsTheHostKeyComponent() throws {
+        // The server holds only an Ed25519 host key, and the client claims to accept only P256 host keys. The key
+        // exchange algorithm lists still overlap, so the host key list is the only thing that failed.
+        let allocator = ByteBufferAllocator()
+        let loop = EmbeddedEventLoop()
+
+        var server = SSHKeyExchangeStateMachine(
+            allocator: allocator,
+            loop: loop,
+            role: .server(.init(hostKeys: [.init(ed25519Key: .init())], userAuthDelegate: DenyAllServerAuthDelegate())),
+            remoteVersion: Constants.version,
+            protectionSchemes: [AES256GCMOpenSSHTransportProtection.self],
+            previousSessionIdentifier: nil
+        )
+
+        var clientMessage = server.createKeyExchangeMessage()
+        clientMessage.serverHostKeyAlgorithms = ["ecdsa-sha2-nistp256"]
+        server.send(keyExchange: server.createKeyExchangeMessage())
+
+        XCTAssertThrowsError(try server.handle(keyExchange: clientMessage)) { error in
+            let failure = (error as? NIOSSHError)?.negotiationFailure
+            XCTAssertEqual(failure?.component, .hostKey)
+            XCTAssertEqual(failure?.localAlgorithms, ["ssh-ed25519"])
+            XCTAssertEqual(failure?.remoteAlgorithms, ["ecdsa-sha2-nistp256"])
+        }
+    }
+
+    func testNegotiationFailureReportsTheKeyExchangeComponent() throws {
+        let allocator = ByteBufferAllocator()
+        let loop = EmbeddedEventLoop()
+
+        var server = SSHKeyExchangeStateMachine(
+            allocator: allocator,
+            loop: loop,
+            role: .server(.init(hostKeys: [.init(ed25519Key: .init())], userAuthDelegate: DenyAllServerAuthDelegate())),
+            remoteVersion: Constants.version,
+            protectionSchemes: [AES256GCMOpenSSHTransportProtection.self],
+            previousSessionIdentifier: nil
+        )
+
+        var clientMessage = server.createKeyExchangeMessage()
+        clientMessage.keyExchangeAlgorithms = ["diffie-hellman-group14-sha1"]
+        server.send(keyExchange: server.createKeyExchangeMessage())
+
+        XCTAssertThrowsError(try server.handle(keyExchange: clientMessage)) { error in
+            let failure = (error as? NIOSSHError)?.negotiationFailure
+            XCTAssertEqual(failure?.component, .keyExchange)
+            XCTAssertEqual(
+                failure?.localAlgorithms,
+                SSHKeyExchangeStateMachine.supportedKeyExchangeAlgorithms.map { String($0) }
+            )
+            XCTAssertEqual(failure?.remoteAlgorithms, ["diffie-hellman-group14-sha1"])
+        }
+    }
+
     func testMACAlgorithmListIsDeduplicated() throws {
         // Two schemes that share a MAC name must produce only one MAC entry in KEXINIT.
         let client = SSHKeyExchangeStateMachine(
