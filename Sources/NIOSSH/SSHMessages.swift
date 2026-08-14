@@ -694,7 +694,9 @@ extension ByteBuffer {
                         return nil
                     }
 
-                    guard algorithmName.readableBytesView.elementsEqual(publicKey.keyPrefix) else {
+                    // RFC 8332: an `ssh-rsa` key may be offered under any of three signature algorithm names,
+                    // so this is a "may this key sign with that name" check, not string equality.
+                    guard publicKey.acceptsSignatureAlgorithm(algorithmName.readableBytesView) else {
                         throw NIOSSHError.invalidSSHMessage(reason: "algorithm and key mismatch in user auth request")
                     }
 
@@ -770,8 +772,9 @@ extension ByteBuffer {
                 return nil
             }
 
-            // Validate consistency here.
-            guard publicKeyType.readableBytesView.elementsEqual(publicKey.keyPrefix) else {
+            // Validate consistency here. As in the user auth request, RSA keys may name any of their three
+            // RFC 8332 signature algorithms.
+            guard publicKey.acceptsSignatureAlgorithm(publicKeyType.readableBytesView) else {
                 throw NIOSSHError.invalidSSHMessage(reason: "inconsistent key type")
             }
 
@@ -1373,7 +1376,9 @@ extension ByteBuffer {
         case .publicKey(.known(key: let key, signature: let signature)):
             writtenBytes += self.writeSSHString("publickey".utf8)
             writtenBytes += self.writeSSHBoolean(signature != nil)
-            writtenBytes += self.writeSSHString(key.keyPrefix)
+            // The algorithm name here must be the same string that went into the signed payload, which for RSA
+            // is the flavor the signature was actually made with (RFC 8332).
+            writtenBytes += self.writeSSHString(signature.map(key.offeredAlgorithmName(for:)) ?? key.keyPrefix)
             writtenBytes += self.writeCompositeSSHString { buffer in
                 buffer.writeSSHHostKey(key)
             }
@@ -1406,6 +1411,10 @@ extension ByteBuffer {
     }
 
     mutating func writeUserAuthPKOKMessage(_ message: SSHMessage.UserAuthPKOKMessage) -> Int {
+        // PK_OK should echo the algorithm name the client offered, but NIOSSH's client never sends the
+        // signature-less probe that provokes one, so no NIOSSH peer can observe the difference. Writing the key
+        // prefix here is what upstream does; a server that needs strict RFC 8332 echoing would have to carry
+        // the offered name on `UserAuthPKOKMessage`.
         var writtenBytes = 0
         writtenBytes += self.writeSSHString(message.key.keyPrefix)
         writtenBytes += self.writeCompositeSSHString { buffer in
