@@ -340,6 +340,105 @@ final class SSHPacketParserTests: XCTestCase {
             XCTFail("Expecting .newKeys")
         }
     }
+
+    func testLengthDecryptionReceivesThePacketSequenceNumber() throws {
+        // `chacha20-poly1305@openssh.com` derives the length field's keystream from the packet sequence number,
+        // so it cannot decrypt the length without it. The sequence number runs continuously across NEWKEYS,
+        // which means the first encrypted packet's number depends on how many cleartext packets preceded it —
+        // it is emphatically not zero.
+        let allocator = ByteBufferAllocator()
+        var parser = SSHPacketParser(isServer: false, allocator: allocator)
+        self.feedVersion(to: &parser)
+
+        // Two cleartext packets first, so the sequence number is non-zero by the time encryption starts.
+        for expectedSequenceNumber in UInt32(1)...UInt32(2) {
+            var part = ByteBuffer(bytes: [0, 0, 0, 12, 10, 21, 41, 114, 125, 250, 3, 79, 3, 217, 166, 136])
+            parser.append(bytes: &part)
+
+            switch try parser.nextPacket() {
+            case .newKeys:
+                XCTAssertEqual(parser.sequenceNumber, expectedSequenceNumber)
+            default:
+                XCTFail("Expecting .newKeys")
+            }
+        }
+
+        let encryptionKey = SymmetricKey(size: .bits128)
+        let macKey = SymmetricKey(size: .bits128)
+        let protection = try SequenceNumberRecordingTransportProtection(
+            initialKeys: .init(
+                initialInboundIV: [],
+                initialOutboundIV: [],
+                inboundEncryptionKey: encryptionKey,
+                outboundEncryptionKey: encryptionKey,
+                inboundMACKey: macKey,
+                outboundMACKey: macKey
+            )
+        )
+        parser.addEncryption(protection)
+
+        for expectedSequenceNumber in UInt32(2)...UInt32(4) {
+            var part = allocator.buffer(capacity: 1024)
+            part.writeSSHPacket(
+                message: .newKeys,
+                lengthEncrypted: protection.lengthEncrypted,
+                blockSize: protection.cipherBlockSize
+            )
+            XCTAssertNoThrow(try protection.encryptPacket(&part, sequenceNumber: expectedSequenceNumber))
+            parser.append(bytes: &part)
+
+            switch try parser.nextPacket() {
+            case .newKeys:
+                XCTAssertEqual(parser.sequenceNumber, expectedSequenceNumber + 1)
+            default:
+                XCTFail("Expecting .newKeys")
+            }
+        }
+
+        // The first post-NEWKEYS packet was decrypted as sequence number 2, not 0.
+        XCTAssertEqual(protection.recordedSequenceNumbers, [2, 3, 4])
+
+        // And the parser reached the scheme through the new overload, not the sequence-number-free one.
+        XCTAssertEqual(protection.legacyCallCount, 0)
+    }
+
+    func testLengthDecryptionDefaultsToTheSequenceNumberFreeOverload() throws {
+        // `TestTransportProtection` implements only `decryptFirstBlock(_:)`. It must keep working unchanged,
+        // because that is what every existing conformer — in this package and outside it — looks like.
+        let allocator = ByteBufferAllocator()
+        var parser = SSHPacketParser(isServer: false, allocator: allocator)
+        self.feedVersion(to: &parser)
+
+        let encryptionKey = SymmetricKey(size: .bits128)
+        let macKey = SymmetricKey(size: .bits128)
+        let protection = TestTransportProtection(
+            initialKeys: .init(
+                initialInboundIV: [],
+                initialOutboundIV: [],
+                inboundEncryptionKey: encryptionKey,
+                outboundEncryptionKey: encryptionKey,
+                inboundMACKey: macKey,
+                outboundMACKey: macKey
+            )
+        )
+        parser.addEncryption(protection)
+
+        var part = allocator.buffer(capacity: 1024)
+        part.writeSSHPacket(
+            message: .newKeys,
+            lengthEncrypted: protection.lengthEncrypted,
+            blockSize: protection.cipherBlockSize
+        )
+        XCTAssertNoThrow(try protection.encryptPacket(&part, sequenceNumber: 0))
+        parser.append(bytes: &part)
+
+        switch try parser.nextPacket() {
+        case .newKeys:
+            XCTAssertEqual(parser.sequenceNumber, 1)
+        default:
+            XCTFail("Expecting .newKeys")
+        }
+    }
 }
 
 extension ByteBuffer {

@@ -81,7 +81,20 @@ public protocol NIOSSHTransportProtection: AnyObject {
     /// It is guaranteed that `decryptRemainingPacket` will be called with exactly the same buffer
     /// passed to `source`. Thus some implementations will be able to avoid storing state for
     /// partial packet decryption.
+    ///
+    /// Prefer implementing ``decryptFirstBlock(_:sequenceNumber:)`` if the scheme needs the sequence number.
     func decryptFirstBlock(_ source: inout ByteBuffer) throws
+
+    /// Given the first cipher block size, decrypt the length field, knowing the packet's sequence number.
+    ///
+    /// Identical to ``decryptFirstBlock(_:)`` except that the sequence number of the packet being decrypted is
+    /// supplied. Some schemes need it: `chacha20-poly1305@openssh.com` encrypts the length field under a
+    /// separate key with the sequence number as the nonce, so it cannot decrypt the length without it.
+    ///
+    /// The default implementation ignores the sequence number and calls ``decryptFirstBlock(_:)``, so schemes
+    /// that do not need it implement only that method. This mirrors OpenSSH's own
+    /// `chachapoly_get_length(ctx, plenp, seqnr, cp, len)`.
+    func decryptFirstBlock(_ source: inout ByteBuffer, sequenceNumber: UInt32) throws
 
     /// Decrypt the remainder of the packet.
     ///
@@ -102,5 +115,11 @@ extension NIOSSHTransportProtection {
     var cipherBlockSize: Int {
         // We just delegate to the static.
         Self.cipherBlockSize
+    }
+
+    /// Most schemes derive the length field's keystream from their own IV state and do not need the sequence
+    /// number, so they implement only ``decryptFirstBlock(_:)`` and inherit this.
+    public func decryptFirstBlock(_ source: inout ByteBuffer, sequenceNumber: UInt32) throws {
+        try self.decryptFirstBlock(&source)
     }
 }

@@ -161,7 +161,10 @@ struct SSHPacketParser {
             return nil
         }
 
-        try protection.decryptFirstBlock(&self.buffer)
+        // The sequence number runs continuously across the cleartext-to-encrypted transition, so the first
+        // packet after NEWKEYS gets whatever number the preceding cleartext packets left us on, not zero.
+        // `chacha20-poly1305@openssh.com` needs exactly that number to decrypt the length field.
+        try protection.decryptFirstBlock(&self.buffer, sequenceNumber: self.sequenceNumber)
 
         // This force unwrap is safe because we must have a block size, and a block size is always going to be more than 4 bytes.
         return self.buffer.getInteger(at: self.buffer.readerIndex)! + UInt32(protection.macBytes)
