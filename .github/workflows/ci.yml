@@ -16,12 +16,12 @@ concurrency:
 jobs:
     macos:
         name: Build and test (macOS)
-        runs-on: macos-latest
+        runs-on: macos-26
         steps:
-            - uses: actions/checkout@v5
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
             - name: Swift version
               run: swift --version
             - name: Build
-              run: swift build --build-tests
+              run: swift build --build-tests --jobs 4
             - name: Test
-              run: swift test
+              run: swift test --skip-build

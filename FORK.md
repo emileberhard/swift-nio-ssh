@@ -4,12 +4,13 @@ This fork exists to let AgenTTY — an iOS SSH client for AI coding agents — c
 actually have. Upstream `swift-nio-ssh` supports Ed25519 and ECDSA only; a large share of real-world
 servers and user keys are RSA, and NIOSSH refuses them outright.
 
-**Base:** `8f33cac67309a13aecc0a4d95044543549b20ffb`, upstream tag `0.12.0`.
+**Base:** `3ec281496f28a3b6581afd946b759e2642f5cd8d`, upstream tag `0.15.0`.
 **Branch:** `agentty-nio-ssh`. `main` is a clean upstream mirror and is never modified.
 
-Every commit here is independently `swift test`-green on macOS with the Xcode 27 toolchain (Swift 6.4),
-which is the toolchain AgenTTY itself builds with. Each commit is one concern, so a bisect lands
-somewhere useful. Nothing is rebased once pushed.
+The original ten-commit AgenTTY series was rebased onto upstream 0.15.0 before
+publication. Only the dependency range and replacement CI workflows conflicted.
+The published branch retains upstream history and focused compatibility commits.
+AgenTTY pins an immutable revision; published revisions are never rewritten.
 
 ## The delta
 
@@ -205,3 +206,11 @@ On each upstream `swift-nio-ssh` release, re-check whether RSA support has lande
 of these eight commits can be dropped. Commits 1, 2, 3, and 8 are the most likely candidates for
 upstreaming on their own merits; 4–7 exist only because upstream has made a deliberate choice not to ship
 RSA.
+
+## Publication maintenance
+
+The restored branch includes upstream 0.13.0–0.15.0, including packet-size,
+buffered-state and authentication-attempt limits. The swift-crypto compatibility range
+remains 3.x: the 4.x/5.x n/e RSA initializer rejects 1024-bit host keys, which
+would change this fork's documented compatibility contract. Modified Swift files carry a prominent modification
+notice; Apple headers, LICENSE.txt and NOTICE.txt remain authoritative.

@@ -1,3 +1,13 @@
+# AgenTTY SSH compatibility fork
+
+This is a modified fork of [Apple swift-nio-ssh](https://github.com/apple/swift-nio-ssh),
+based on upstream 0.15.0. The `agentty-nio-ssh` branch adds RSA keys and signatures,
+negotiation diagnostics, RFC 4253 key expansion, and a packet-length decryption hook.
+See [FORK.md](FORK.md) for the changes and compatibility contract.
+The package retains the [Apache License 2.0](LICENSE.txt).
+
+---
+
 # SwiftNIO SSH
 
 This project contains SSH support using [SwiftNIO](https://github.com/apple/swift-nio).

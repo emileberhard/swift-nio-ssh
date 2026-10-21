@@ -1,3 +1,4 @@
+// Modified by Emil Eberhard in 2026 for the AgenTTY SSH compatibility fork.
 //===----------------------------------------------------------------------===//
 //
 // This source file is part of the SwiftNIO open source project

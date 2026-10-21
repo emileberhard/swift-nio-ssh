@@ -1,0 +1,7 @@
+AgenTTY SSH compatibility fork
+Based on SwiftNIO SSH, Copyright Apple Inc. and the SwiftNIO project authors.
+Modifications Copyright 2026 Emil Eberhard.
+
+This product includes software developed by Apple Inc. and the SwiftNIO
+project authors. Modified Swift files identify the AgenTTY modifications.
+See FORK.md for the modification history and LICENSE.txt for Apache-2.0.
