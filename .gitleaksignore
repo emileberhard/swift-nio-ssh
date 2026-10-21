@@ -1,0 +1,6 @@
+# Public upstream test fixtures and historical source identifiers.
+4b8bf94e5164c4dc5acc56b2c43f1fa2a1d61d6a:Tests/NIOSSHTests/CertifiedKeyTests.swift:private-key:29
+4b8bf94e5164c4dc5acc56b2c43f1fa2a1d61d6a:Tests/NIOSSHTests/UserAuthenticationStateMachineTests.swift:private-key:25
+5d95ebaddd7f546502f9760df3a2de8c167369da:Tests/NIOSSHTests/UserAuthenticationStateMachineTests.swift:private-key:23
+ac7efc9f8b02acd2a0a08df3da5eb41d8c901f13:Tests/NIOSSHTests/CertifiedKeyTests.swift:private-key:25
+a9a41deeba35e0556a9c755ec193595ab5aa4e86:Sources/NIOSSH/Key Exchange/Curve25519KeyExchange.swift:generic-api-key:22
