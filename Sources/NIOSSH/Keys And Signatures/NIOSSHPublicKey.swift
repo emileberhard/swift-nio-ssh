@@ -18,6 +18,7 @@ import Foundation
 import NIOCore
 import NIOFoundationCompat
 import _CryptoExtras
+import SwiftASN1
 
 /// An SSH public key.
 ///
@@ -480,15 +481,19 @@ extension ByteBuffer {
             throw NIOSSHError.invalidDomainParametersForKey(parameters: "RSA public exponent is zero")
         }
 
-        // Unlike the DER and PEM initializers, `_RSA.Signing.PublicKey.init(n:e:)` enforces no minimum key size,
-        // so we impose our own. 1024 bits is the floor because OpenSSH still accepts host keys that small; the
+        // 1024 bits is the floor because OpenSSH still accepts host keys that small; the
         // ceiling exists so a hostile peer cannot make us do unbounded work in BoringSSL.
         let modulusBits = (modulus.count * 8) - (modulus.first.map { $0.leadingZeroBitCount } ?? 8)
         guard modulusBits >= 1024, modulusBits <= 16384 else {
             throw NIOSSHError.invalidDomainParametersForKey(parameters: "RSA modulus of \(modulusBits) bits")
         }
 
-        let key = try _RSA.Signing.PublicKey(n: modulus, e: publicExponent)
+        var der = DER.Serializer()
+        try der.appendConstructedNode(identifier: .sequence) { sequence in
+            try sequence.serialize(ArraySlice(modulus))
+            try sequence.serialize(ArraySlice(publicExponent))
+        }
+        let key = try _RSA.Signing.PublicKey(unsafeDERRepresentation: der.serializedBytes)
         return NIOSSHPublicKey(backingKey: .rsa(try SSHRSAPublicKey(key)))
     }
 

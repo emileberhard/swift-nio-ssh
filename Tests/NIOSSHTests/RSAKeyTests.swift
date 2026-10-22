@@ -124,8 +124,8 @@ final class RSAKeyTests: XCTestCase {
         var modulus = self.modulus(bits: 2048)
         modulus[0] = 0x01
 
-        let key = try _RSA.Signing.PublicKey(n: modulus, e: [0x01, 0x00, 0x01])
-        let publicKey = NIOSSHPublicKey(backingKey: .rsa(try SSHRSAPublicKey(key)))
+        var input = self.rsaKeyBlob(e: [0x01, 0x00, 0x01], n: modulus)
+        let publicKey = try XCTUnwrap(input.readSSHHostKey())
 
         var buffer = ByteBuffer()
         buffer.writeSSHHostKey(publicKey)
@@ -133,6 +133,17 @@ final class RSAKeyTests: XCTestCase {
         // 4 byte type length + "ssh-rsa" + 4 + 3 byte exponent + 4 + 256 byte modulus, with no sign-preserving byte.
         XCTAssertEqual(buffer.writerIndex, 4 + 7 + 4 + 3 + 4 + 256)
         XCTAssertEqual(try buffer.readSSHHostKey(), publicKey)
+    }
+
+    func testLegacy1024BitHostKeyRoundTrips() throws {
+        var buffer = self.rsaKeyBlob(e: [0x01, 0x00, 0x01], n: self.modulus(bits: 1024))
+        let key = try XCTUnwrap(buffer.readSSHHostKey())
+        guard case .rsa(let rsaKey) = key.backingKey else {
+            XCTFail("Fixture did not parse as RSA")
+            return
+        }
+        XCTAssertEqual(rsaKey.key.keySizeInBits, 1024)
+        XCTAssertEqual(try NIOSSHPublicKey(openSSHPublicKey: String(openSSHPublicKey: key)), key)
     }
 
     func testEquatableAndHashable() throws {

@@ -170,9 +170,11 @@ better. That is the entire reason it is here: some older Dropbear and OpenSSH �
 other host key algorithm, and AgenTTY's users have such hosts. Removing it would make those hosts
 unreachable; keeping it costs nothing against any modern server.
 
-**`swift-crypto` lower bound raised to 3.15.0.** `_RSA.Signing.PublicKey.init(n:e:)` and
-`getKeyPrimitives()` are recent additions and there is no reasonable way to construct an RSA key from SSH
-wire primitives without them.
+**`swift-crypto` lower bound raised to 4.5.2.** Earlier releases include
+[GHSA-8q93-f6xh-4f6f](https://github.com/apple/swift-crypto/security/advisories/GHSA-8q93-f6xh-4f6f).
+SwiftASN1 serializes SSH modulus/exponent values as PKCS#1 DER for the explicit
+`unsafeDERRepresentation` initializer, preserving 1024-bit host-key compatibility
+without retaining the vulnerable dependency.
 
 **The host key floor is 1024 bits, not 2048.** A host key is the remote peer's choice, not ours, and
 refusing to represent a 1024-bit host key would simply make those hosts unreachable rather than more
@@ -212,8 +214,8 @@ RSA.
 
 The restored branch includes upstream 0.13.0–0.15.0, including packet-size,
 buffered-state and authentication-attempt limits. The swift-crypto compatibility range
-remains 3.x: the 4.x/5.x n/e RSA initializer rejects 1024-bit host keys, which
-would change this fork's documented compatibility contract. Modified Swift files carry a prominent modification
+requires 4.5.2 or newer within 4.x. RSA host-key parsing uses the explicit legacy
+initializer after enforcing the fork's 1024–16384-bit bounds. Modified Swift files carry a prominent modification
 notice; Apple headers, LICENSE.txt and NOTICE.txt remain authoritative.
 
 ## Releases

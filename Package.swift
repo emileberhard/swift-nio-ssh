@@ -41,8 +41,9 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.81.0"),
         // AgenTTY fork: raised from "1.0.0" because `_RSA.Signing.PublicKey.init(n:e:)` and `getKeyPrimitives()`
         // are recent additions, and a standalone `swift test` must not resolve a version that lacks them.
-        .package(url: "https://github.com/apple/swift-crypto.git", "3.15.0"..<"4.0.0"),
+        .package(url: "https://github.com/apple/swift-crypto.git", "4.5.2"..<"5.0.0"),
         .package(url: "https://github.com/apple/swift-atomics.git", from: "1.0.2"),
+        .package(url: "https://github.com/apple/swift-asn1.git", from: "1.5.1"),
     ],
     targets: [
         .target(
@@ -54,6 +55,7 @@ let package = Package(
                 .product(name: "Crypto", package: "swift-crypto"),
                 .product(name: "_CryptoExtras", package: "swift-crypto"),
                 .product(name: "Atomics", package: "swift-atomics"),
+                .product(name: "SwiftASN1", package: "swift-asn1"),
             ],
             swiftSettings: swiftSettings
         ),
