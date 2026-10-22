@@ -5,7 +5,8 @@ actually have. Upstream `swift-nio-ssh` supports Ed25519 and ECDSA only; a large
 servers and user keys are RSA, and NIOSSH refuses them outright.
 
 **Base:** `3ec281496f28a3b6581afd946b759e2642f5cd8d`, upstream tag `0.15.0`.
-**Branch:** `agentty-nio-ssh`. `main` is a clean upstream mirror and is never modified.
+**Default branch:** `agentty-nio-ssh`. Upstream history is preserved through 0.15.0;
+follow Apple upstream separately rather than modifying its commits.
 
 The original ten-commit AgenTTY series was rebased onto upstream 0.15.0 before
 publication. Only the dependency range and replacement CI workflows conflicted.
@@ -214,3 +215,16 @@ buffered-state and authentication-attempt limits. The swift-crypto compatibility
 remains 3.x: the 4.x/5.x n/e RSA initializer rejects 1024-bit host keys, which
 would change this fork's documented compatibility contract. Modified Swift files carry a prominent modification
 notice; Apple headers, LICENSE.txt and NOTICE.txt remain authoritative.
+
+## Releases
+
+Push an annotated MAJOR.MINOR.PATCH tag on the default `agentty-nio-ssh` branch,
+higher than every existing version tag. Hosted CI validates the ref and ordering,
+runs tests, and creates a source release with the tag message as its notes.
+Upstream and fork releases retain their independent identities; AgenTTY keeps
+revision pins. Do not retag a published revision.
+
+Upstream 0.14.1 fixes [GHSA-998x-vgvp-xwpc](https://github.com/apple/swift-nio-ssh/security/advisories/GHSA-998x-vgvp-xwpc),
+an unauthenticated out-of-bounds stack write while parsing oversized ECDSA
+signatures. The former 0.12.0 base was vulnerable; this 0.15.0-based fork includes
+the fix. Keep the upstream security fixes when maintaining the compatibility delta.
